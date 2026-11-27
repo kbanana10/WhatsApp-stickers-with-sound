@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
@@ -1048,6 +1049,42 @@ private fun CreateAndExportSection(
                             Spacer(Modifier.width(6.dp))
                             Text(if (state.isPlayingStickerPreview) strings.stopPlay else strings.playTogetherBtn)
                         }
+                    }
+                }
+
+                // Root Direct Sound Sticker Injection (Magisk)
+                if (state.isRootAvailable && res.oggBytes != null) {
+                    Button(
+                        onClick = {
+                            viewModel.injectGeneratedStickerWithRoot(
+                                successTemplate = strings.rootInjectSuccessSingle,
+                                missingOpusMsg = strings.rootMissingOpusError
+                            )
+                        },
+                        enabled = !state.isInjectingRoot && !isBusy,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .testTag("root_inject_sticker_button")
+                    ) {
+                        if (state.isInjectingRoot) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (state.isInjectingRoot) strings.rootInjectingStatus
+                            else strings.rootInjectSingleBtn
+                        )
                     }
                 }
 

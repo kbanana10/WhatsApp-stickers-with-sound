@@ -9,7 +9,10 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.StickerEntity
 import com.example.data.local.StickerPackWithStickers
 import com.example.data.repository.StickerPackRepository
+import com.example.whatsapp.RootPackMetadata
+import com.example.whatsapp.RootStickerInput
 import com.example.whatsapp.WhatsAppBridge
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class PacksViewModel(application: Application) : AndroidViewModel(application) {
@@ -36,7 +40,22 @@ class PacksViewModel(application: Application) : AndroidViewModel(application) {
     private val _feedbackMessage = MutableStateFlow<String?>(null)
     val feedbackMessage: StateFlow<String?> = _feedbackMessage.asStateFlow()
 
+    private val _isSuccessFeedback = MutableStateFlow(false)
+    val isSuccessFeedback: StateFlow<Boolean> = _isSuccessFeedback.asStateFlow()
+
+    private val _isRootAvailable = MutableStateFlow(false)
+    val isRootAvailable: StateFlow<Boolean> = _isRootAvailable.asStateFlow()
+
+    private val _isInjectingRoot = MutableStateFlow(false)
+    val isInjectingRoot: StateFlow<Boolean> = _isInjectingRoot.asStateFlow()
+
     private var player: MediaPlayer? = null
+
+    init {
+        viewModelScope.launch {
+            _isRootAvailable.value = runCatching { WhatsAppBridge.isRootAvailable() }.getOrDefault(false)
+        }
+    }
 
     fun observePack(packId: String) = repository.observePack(packId)
 
@@ -123,8 +142,111 @@ class PacksViewModel(application: Application) : AndroidViewModel(application) {
         _playingStickerId.value = null
     }
 
+    fun injectStickerWithRoot(
+        sticker: StickerEntity,
+        packName: String,
+        publisher: String,
+        successTemplate: String,
+        missingOpusMsg: String
+    ) {
+        if (_isInjectingRoot.value) return
+        viewModelScope.launch {
+            _isInjectingRoot.value = true
+            _feedbackMessage.value = null
+            _isSuccessFeedback.value = false
+            val input = withContext(Dispatchers.IO) {
+                val webpFile = repository.stickerFile(sticker.packId, sticker.fileName)
+                val oggFile = repository.stickerFile(sticker.packId, sticker.oggFileName)
+                if (!webpFile.exists() || !oggFile.exists() || oggFile.length() == 0L) {
+                    null
+                } else {
+                    RootStickerInput(
+                        webpBytes = webpFile.readBytes(),
+                        opusBytes = oggFile.readBytes(),
+                        durationSec = maxOf(sticker.audioDurationMs, sticker.durationMs) / 1000.0,
+                        side = sticker.side,
+                        emojis = sticker.emojis,
+                        packName = packName.ifBlank { "Audio Stickers" },
+                        publisher = publisher.ifBlank { "Audio Stickers" }
+                    )
+                }
+            }
+            if (input == null) {
+                _isInjectingRoot.value = false
+                _feedbackMessage.value = missingOpusMsg
+                return@launch
+            }
+            WhatsAppBridge.injectSoundStickerWithRoot(appContext, input, relaunchWhatsApp = false)
+                .onSuccess { res ->
+                    _isInjectingRoot.value = false
+                    _isRootAvailable.value = true
+                    _isSuccessFeedback.value = true
+                    _feedbackMessage.value = successTemplate.format(res.packageName)
+                }
+                .onFailure { err ->
+                    _isInjectingRoot.value = false
+                    _isSuccessFeedback.value = false
+                    _feedbackMessage.value = err.message ?: "Root injection failed"
+                }
+        }
+    }
+
+    fun injectPackWithRoot(
+        packWithStickers: StickerPackWithStickers,
+        successTemplate: String,
+        noAudioPackMsg: String
+    ) {
+        if (_isInjectingRoot.value) return
+        viewModelScope.launch {
+            _isInjectingRoot.value = true
+            _feedbackMessage.value = null
+            _isSuccessFeedback.value = false
+            val pack = packWithStickers.pack
+            val inputs = withContext(Dispatchers.IO) {
+                packWithStickers.stickers.mapNotNull { sticker ->
+                    val webpFile = repository.stickerFile(sticker.packId, sticker.fileName)
+                    val oggFile = repository.stickerFile(sticker.packId, sticker.oggFileName)
+                    if (!webpFile.exists() || !oggFile.exists() || oggFile.length() == 0L) {
+                        null
+                    } else {
+                        RootStickerInput(
+                            webpBytes = webpFile.readBytes(),
+                            opusBytes = oggFile.readBytes(),
+                            durationSec = maxOf(sticker.audioDurationMs, sticker.durationMs) / 1000.0,
+                            side = sticker.side,
+                            emojis = sticker.emojis,
+                            packName = pack.name,
+                            publisher = pack.publisher
+                        )
+                    }
+                }
+            }
+            if (inputs.isEmpty()) {
+                _isInjectingRoot.value = false
+                _feedbackMessage.value = noAudioPackMsg
+                return@launch
+            }
+            WhatsAppBridge.injectSoundPackWithRoot(
+                context = appContext,
+                packMetadata = RootPackMetadata(pack.packId, pack.name, pack.publisher),
+                stickers = inputs,
+                relaunchWhatsApp = false
+            ).onSuccess { res ->
+                _isInjectingRoot.value = false
+                _isRootAvailable.value = true
+                _isSuccessFeedback.value = true
+                _feedbackMessage.value = successTemplate.format(res.injectedCount, res.packageName)
+            }.onFailure { err ->
+                _isInjectingRoot.value = false
+                _isSuccessFeedback.value = false
+                _feedbackMessage.value = err.message ?: "Root injection failed"
+            }
+        }
+    }
+
     fun clearFeedback() {
         _feedbackMessage.update { null }
+        _isSuccessFeedback.value = false
     }
 
     override fun onCleared() {

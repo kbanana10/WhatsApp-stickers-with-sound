@@ -130,6 +130,7 @@ object WebpMuxer {
             if (!soundSha256.isNullOrEmpty()) {
                 append(",\"sound-sha256\":")
                 append(escapeJson(soundSha256))
+                append(",\"is-from-user-created-pack\":1")
             }
             append('}')
         }

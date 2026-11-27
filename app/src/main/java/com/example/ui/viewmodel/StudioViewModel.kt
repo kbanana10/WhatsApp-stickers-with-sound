@@ -24,6 +24,7 @@ import com.example.engine.Mp4StickerExporter
 import com.example.engine.SizeCapMode
 import com.example.engine.SourceKind
 import com.example.engine.StickerLimits
+import com.example.whatsapp.RootStickerInput
 import com.example.whatsapp.WhatsAppBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -102,6 +103,8 @@ data class StudioUiState(
     val isCreating: Boolean = false,
     val createProgress: Float = 0f,
     val isExportingMp4: Boolean = false,
+    val isRootAvailable: Boolean = false,
+    val isInjectingRoot: Boolean = false,
     val generatedSticker: GeneratedSticker? = null,
     val generatedKey: String? = null,
 
@@ -176,6 +179,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     syncOffsetMs = prefs.syncOffsetMs
                 )
             }
+        }
+        viewModelScope.launch {
+            val hasRoot = runCatching { WhatsAppBridge.isRootAvailable() }.getOrDefault(false)
+            _uiState.update { it.copy(isRootAvailable = hasRoot) }
         }
     }
 
@@ -821,6 +828,48 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             }.onFailure { err ->
                 _uiState.update { it.copy(errorMessage = err.message) }
             }
+        }
+    }
+
+    fun injectGeneratedStickerWithRoot(successTemplate: String, missingOpusMsg: String) {
+        val st = _uiState.value
+        val generated = st.generatedSticker ?: return
+        if (st.isInjectingRoot) return
+        val opusBytes = generated.oggBytes
+        if (opusBytes == null || opusBytes.isEmpty()) {
+            _uiState.update { it.copy(errorMessage = missingOpusMsg) }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInjectingRoot = true, errorMessage = null, statusBanner = null) }
+            val input = RootStickerInput(
+                webpBytes = generated.webpBytes,
+                opusBytes = opusBytes,
+                durationSec = max(generated.audioDurationSec, generated.durationSec),
+                side = generated.side,
+                emojis = "🔊",
+                packName = st.packName.ifBlank { generated.packName.ifBlank { "Audio Stickers" } },
+                publisher = st.publisher.ifBlank { generated.publisher.ifBlank { "Audio Stickers" } },
+                waveform = generated.waveform
+            )
+            WhatsAppBridge.injectSoundStickerWithRoot(appContext, input, relaunchWhatsApp = false)
+                .onSuccess { res ->
+                    _uiState.update {
+                        it.copy(
+                            isInjectingRoot = false,
+                            isRootAvailable = true,
+                            statusBanner = successTemplate.format(res.packageName)
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            isInjectingRoot = false,
+                            errorMessage = err.message ?: "Root injection failed"
+                        )
+                    }
+                }
         }
     }
 

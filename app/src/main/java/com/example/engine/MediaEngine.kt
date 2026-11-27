@@ -83,7 +83,8 @@ data class GeneratedSticker(
     val elapsedMs: Long,
     val packName: String,
     val publisher: String,
-    val mp4File: File? = null
+    val mp4File: File? = null,
+    val waveform: ByteArray? = null
 )
 
 object MediaEngine {
@@ -448,6 +449,7 @@ object MediaEngine {
                 .take(24)
                 .map { it.bitmap }
 
+            val waveform = computeWaveform64(pcm)
             onProgress(1f)
             GeneratedSticker(
                 webpBytes = finalWebp,
@@ -464,7 +466,8 @@ object MediaEngine {
                 estimatedWebpBytes = cell?.estBytes,
                 elapsedMs = System.currentTimeMillis() - t0,
                 packName = packName.trim(),
-                publisher = publisher.trim()
+                publisher = publisher.trim(),
+                waveform = waveform
             )
         }
     }
@@ -822,8 +825,28 @@ object MediaEngine {
         return delays
     }
 
-    private fun sha256Base64(bytes: ByteArray): String {
+    fun sha256Base64(bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         return android.util.Base64.encodeToString(digest, android.util.Base64.NO_WRAP)
+    }
+
+    fun computeWaveform64(pcm: ShortArray): ByteArray {
+        val buckets = 64
+        val out = ByteArray(buckets)
+        if (pcm.isEmpty()) return out
+        for (b in 0 until buckets) {
+            val start = (b * pcm.size) / buckets
+            val end = min(pcm.size, ((b + 1) * pcm.size) / buckets).coerceAtLeast(start + 1)
+            var peak = 0
+            val stride = max(1, (end - start) / 64)
+            var i = start
+            while (i < end) {
+                val amp = kotlin.math.abs(pcm[i].toInt())
+                if (amp > peak) peak = amp
+                i += stride
+            }
+            out[b] = ((peak * 100) / 32767).coerceIn(0, 100).toByte()
+        }
+        return out
     }
 }

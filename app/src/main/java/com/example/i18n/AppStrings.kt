@@ -135,7 +135,17 @@ data class Strings(
     val savedToPackMsg: String,
     val exportedFilesMsg: String,
     val processingSpeedNote: String,
-    val errorPrefix: String
+    val errorPrefix: String,
+
+    // Root Direct Injection
+    val rootBadgeLabel: String,
+    val rootInjectSingleBtn: String,
+    val rootInjectPackBtn: String,
+    val rootInjectingStatus: String,
+    val rootInjectSuccessSingle: String,
+    val rootInjectSuccessPack: String,
+    val rootMissingOpusError: String,
+    val rootNoAudioPackError: String
 )
 
 object AppStrings {
@@ -258,7 +268,16 @@ object AppStrings {
         savedToPackMsg = "تم حفظ الملصق في الحزمة بنجاح!",
         exportedFilesMsg = "تم تجهيز الملفات للمشاركة.",
         processingSpeedNote = "معالجة متوازية عبر %d أنوية",
-        errorPrefix = "خطأ"
+        errorPrefix = "خطأ",
+
+        rootBadgeLabel = "صلاحية الروت متاحة (Magisk)",
+        rootInjectSingleBtn = "حقن مباشر في واتساب (روت)",
+        rootInjectPackBtn = "حقن الحزمة بالصوت في واتساب (روت)",
+        rootInjectingStatus = "جارٍ حقن الملصق الصوتي في واتساب...",
+        rootInjectSuccessSingle = "تم حقن الملصق بالصوت في مفضلة واتساب (%s)!",
+        rootInjectSuccessPack = "تم حقن %d ملصقات بالصوت في واتساب (%s)!",
+        rootMissingOpusError = "ملف الصوت Ogg/Opus غير متوفر (يتطلب أندرويد 10 فأحدث).",
+        rootNoAudioPackError = "لا توجد ملصقات تحتوي على صوت Ogg/Opus صالحة في هذه الحزمة."
     )
 
     val English = Strings(
@@ -380,7 +399,16 @@ object AppStrings {
         savedToPackMsg = "Sticker saved to pack!",
         exportedFilesMsg = "Files ready to share.",
         processingSpeedNote = "Parallel engine using %d CPU cores",
-        errorPrefix = "Error"
+        errorPrefix = "Error",
+
+        rootBadgeLabel = "Magisk Root Available",
+        rootInjectSingleBtn = "Direct Inject to WhatsApp (Root)",
+        rootInjectPackBtn = "Direct Inject Sound Pack (Root)",
+        rootInjectingStatus = "Injecting sound sticker into WhatsApp...",
+        rootInjectSuccessSingle = "Injected sound sticker into WhatsApp Favorites (%s)!",
+        rootInjectSuccessPack = "Injected %d sound sticker(s) into WhatsApp (%s)!",
+        rootMissingOpusError = "Ogg/Opus audio is missing (requires Android 10+ Opus encoder).",
+        rootNoAudioPackError = "No stickers with valid Ogg/Opus audio found in this pack."
     )
 
     fun get(language: AppLanguage): Strings = when (language) {

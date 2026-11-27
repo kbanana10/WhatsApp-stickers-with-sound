@@ -179,6 +179,30 @@ object WhatsAppBridge {
             }
         }
 
+    suspend fun isRootAvailable(): Boolean = RootWhatsAppInjector.checkRootAccess()
+
+    suspend fun injectSoundStickerWithRoot(
+        context: Context,
+        sticker: RootStickerInput,
+        relaunchWhatsApp: Boolean = false
+    ): Result<RootInjectionResult> = RootWhatsAppInjector.injectSingleSticker(
+        context = context,
+        sticker = sticker,
+        relaunchWhatsApp = relaunchWhatsApp
+    )
+
+    suspend fun injectSoundPackWithRoot(
+        context: Context,
+        packMetadata: RootPackMetadata,
+        stickers: List<RootStickerInput>,
+        relaunchWhatsApp: Boolean = false
+    ): Result<RootInjectionResult> = RootWhatsAppInjector.injectPack(
+        context = context,
+        packMetadata = packMetadata,
+        stickers = stickers,
+        relaunchWhatsApp = relaunchWhatsApp
+    )
+
     private fun fileToContentUri(context: Context, file: File): Uri {
         return FileProvider.getUriForFile(
             context,

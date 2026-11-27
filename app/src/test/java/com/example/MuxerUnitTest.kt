@@ -46,6 +46,8 @@ class MuxerUnitTest {
         val exifStr = String(exifChunk.data, Charsets.UTF_8)
         assertTrue(exifStr.contains("NewPack"))
         assertTrue(exifStr.contains("NewPub"))
+        assertTrue(exifStr.contains("\"sound-sha256\":\"sha1\""))
+        assertTrue(exifStr.contains("\"is-from-user-created-pack\":1"))
         assertEquals(1, chunks.count { it.fourcc == "ANMF" })
     }
 
