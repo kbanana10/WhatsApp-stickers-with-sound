@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>ملصقات بصوت: السجل</title>
+  <style>
+    :root { --bg:#f7f8fa; --card:#ffffff; --fg:#111b21; --muted:#667781; --line:#dde3e7; --accent:#00a884; --log-bg:#f0f2f5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0b141a; --card:#111b21; --fg:#e9edef; --muted:#8696a0; --line:#222e35; --log-bg:#202c33; }
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 1100px; margin: 0 auto; padding: 20px; font: 13.5px/1.5 system-ui, "Segoe UI", Tahoma, Arial, sans-serif; background: var(--bg); color: var(--fg); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; box-shadow: 0 4px 20px rgba(0,0,0,.06); }
+    .hdr { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    h1 { font-size: 18px; margin: 0; }
+    .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+    .row { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; align-items: center; }
+    button { padding: 7px 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--card); color: inherit; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; transition: .15s; }
+    button:hover { border-color: var(--accent); }
+    button.main { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.main:hover { filter: brightness(1.06); }
+    .lang { display: inline-flex; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+    .lang button { border: none; border-radius: 0; padding: 5px 12px; font-size: 12px; }
+    .lang button.on { background: var(--accent); color: #fff; }
+    #summary { font-size: 12.5px; color: var(--muted); }
+    #log { height: calc(100vh - 210px); min-height: 260px; overflow: auto; font: 11.5px/1.45 ui-monospace, Consolas, monospace; background: var(--log-bg); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); white-space: pre-wrap; direction: ltr; text-align: left; }
+    .e { color: #e55353; } .w { color: #d29a00; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hdr">
+      <h1 id="title">ملصقات بصوت: السجل</h1>
+      <div class="lang">
+        <button id="lang-ar" class="on">العربية</button>
+        <button id="lang-en">English</button>
+      </div>
+    </div>
+    <div class="sub" id="subtitle">إذا حدث أي خطأ، حمّل السجل وشاركه للمساعدة في حل المشكلة. أرقام الهواتف مخفية تلقائياً.</div>
+    <div id="summary">جارٍ التحميل…</div>
+    <div class="row">
+      <button class="main" id="dl">تحميل السجل (.json)</button>
+      <button id="copy">نسخ</button>
+      <button id="errors">الأخطاء فقط</button>
+      <button id="clear">مسح السجل</button>
+    </div>
+    <div id="log"></div>
+  </div>
+  <script src="registro.js"></script>
+</body>
+</html>

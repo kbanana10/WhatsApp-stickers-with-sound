@@ -1,0 +1,6 @@
+{
+  "name": "Audio Stickers",
+  "description": "Fast native Android studio to create WhatsApp audio and animated stickers from videos, GIFs, images, and audio clips with local pack library and direct WhatsApp integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

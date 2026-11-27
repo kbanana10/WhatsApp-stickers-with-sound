@@ -1,0 +1,96 @@
+name: Build Universal Android APK
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Universal APK (Android 7.0 – 16+)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Restore debug keystore
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 --decode debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Run unit and Robolectric tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Universal APK (All Android Versions & ABIs)
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Build Signed Release APK (when release secrets are set)
+        if: secrets.KEYSTORE_BASE64 != '' && secrets.STORE_PASSWORD != '' && secrets.KEY_PASSWORD != ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > my-upload-key.jks
+          KEYSTORE_PATH="$PWD/my-upload-key.jks" gradle :app:assembleRelease --no-daemon
+
+      - name: Collect APK files
+        run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/debug/app-debug.apk release-apks/AudioStickers-universal.apk
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk release-apks/AudioStickers-universal-release.apk
+          fi
+          ls -lh release-apks/
+
+      - name: Upload APK as GitHub Actions Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioStickers-Universal-APK
+          path: release-apks/*.apk
+          if-no-files-found: error
+
+      - name: Publish direct APK download to GitHub Releases
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Audio Stickers {0}', github.ref_name) || 'Audio Stickers (Latest Universal APK)' }}
+          body: |
+            Universal APK supporting Android 7.0 (API 24) through Android 16 (API 36+) across all CPU architectures (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`).
+          files: release-apks/*.apk
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}

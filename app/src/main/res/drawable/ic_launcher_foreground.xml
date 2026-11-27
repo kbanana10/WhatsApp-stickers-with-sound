@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="16.88"
+        android:translateY="16.88"
+        android:scaleX="0.58"
+        android:scaleY="0.58">
+        <!-- Sticker with folded corner -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,22 h62 a12,12 0 0 1 12,12 v40 l-30,30 h-44 a12,12 0 0 1 -12,-12 v-58 a12,12 0 0 1 12,-12 z" />
+        <path
+            android:fillColor="#CBBCFF"
+            android:pathData="M104,74 l-30,30 v-18 a12,12 0 0 1 12,-12 z" />
+        <!-- Speaker -->
+        <path
+            android:fillColor="#6D4AFF"
+            android:pathData="M32,52 h11 l16,-14 v44 l-16,-14 h-11 z" />
+        <!-- Sound waves -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#6D4AFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:pathData="M67,49 a12,12 0 0 1 0,22" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#6D4AFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:pathData="M77,39 a24,24 0 0 1 0,42" />
+    </group>
+</vector>

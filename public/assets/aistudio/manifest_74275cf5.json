@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "default_locale": "ar",
+  "name": "__MSG_extName__",
+  "version": "0.8.0",
+  "description": "__MSG_extDesc__",
+  "icons": {
+    "16": "icons/icono-16.png",
+    "32": "icons/icono-32.png",
+    "48": "icons/icono-48.png",
+    "128": "icons/icono-128.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "__MSG_extTitle__",
+    "default_icon": {
+      "16": "icons/icono-16.png",
+      "32": "icons/icono-32.png"
+    }
+  },
+  "options_page": "registro.html",
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["src/bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["src/logger.js", "src/i18n.js", "src/convert.js", "src/wa.js", "src/ui.js", "src/main.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ]
+}
