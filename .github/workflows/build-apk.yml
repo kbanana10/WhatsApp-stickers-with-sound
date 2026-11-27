@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-apk:
-    name: Build Universal APK (Android 7.0 – 16+)
+    name: Build Universal APK (Android 7.0 - 16+)
     runs-on: ubuntu-latest
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -27,26 +27,32 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
         with:
           packages: |
             platform-tools
-            platforms;android-36.1
+            platforms;android-36
             build-tools;36.0.0
 
-      - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: "9.3.1"
+      - name: Ensure Android 36.1 platform and licenses
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-36.1" || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
 
       - name: Restore debug keystore
         run: |
@@ -65,16 +71,17 @@ jobs:
           fi
 
       - name: Run unit and Robolectric tests
-        run: gradle :app:testDebugUnitTest --no-daemon
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
 
-      - name: Build Universal APK (All Android Versions & ABIs)
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Build Universal Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Build Signed Release APK (when release secrets are set)
         if: env.KEYSTORE_BASE64 != '' && env.STORE_PASSWORD != '' && env.KEY_PASSWORD != ''
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > my-upload-key.jks
-          KEYSTORE_PATH="$PWD/my-upload-key.jks" gradle :app:assembleRelease --no-daemon
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/my-upload-key.jks"
+          KEYSTORE_PATH="$GITHUB_WORKSPACE/my-upload-key.jks" ./gradlew :app:assembleRelease --no-daemon
+          rm -f "$GITHUB_WORKSPACE/my-upload-key.jks"
 
       - name: Collect APK files
         run: |
@@ -86,7 +93,7 @@ jobs:
           ls -lh release-apks/
 
       - name: Upload APK as GitHub Actions Artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: AudioStickers-Universal-APK
           path: release-apks/*.apk
@@ -94,7 +101,7 @@ jobs:
 
       - name: Publish direct APK download to GitHub Releases
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         continue-on-error: true
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}

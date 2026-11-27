@@ -10,6 +10,8 @@ import com.example.engine.WebpMuxer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -56,14 +58,19 @@ data class RootInjectionResult(
     val accountDir: String,
     val injectedCount: Int,
     val primaryWebpFileName: String,
-    val primaryAudioFileName: String
+    val primaryAudioFileName: String,
+    val backupFilePath: String? = null
 )
 
 /**
  * Magisk Mount Master (`su -mm`) direct injector for WhatsApp native sound stickers.
- * Writes `.webp` + `.opus` files into WhatsApp's internal storage and registers them in `stickers.db`.
+ * Includes media/duration guardrails, automatic WAL-checkpointed DB backup, and rollback on failure.
  */
 object RootWhatsAppInjector {
+
+    const val MIN_DURATION_SECONDS = 1
+    const val MAX_DURATION_SECONDS = 10
+    private const val MAX_BACKUPS_TO_KEEP = 3
 
     private val ALLOWED_PACKAGES = listOf("com.whatsapp", "com.whatsapp.w4b")
     private val SAFE_ACCOUNT_DIR_REGEX =
@@ -84,9 +91,6 @@ object RootWhatsAppInjector {
         val stderr: String
     )
 
-    /**
-     * Computes raw 32-byte SHA-256 digest.
-     */
     fun sha256Raw(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
 
@@ -103,11 +107,68 @@ object RootWhatsAppInjector {
     fun toWhatsAppFileNameBase(digest: ByteArray): String =
         toStandardBase64(digest).replace('/', '-')
 
-    fun prepareSticker(input: RootStickerInput): PreparedRootSticker {
-        require(input.webpBytes.isNotEmpty()) { "Sticker WebP payload is empty" }
-        require(input.opusBytes.isNotEmpty()) {
-            "Ogg/Opus audio is required for WhatsApp sound sticker injection (Android 10+ Opus encoder)."
+    fun validateOpusPayload(opusBytes: ByteArray) {
+        require(opusBytes.size >= 28) {
+            "Ogg/Opus audio is missing or too small for WhatsApp sound stickers."
         }
+        val oggHeader = String(opusBytes, 0, 4, Charsets.US_ASCII)
+        require(oggHeader == "OggS") {
+            "Audio payload must be an Ogg Opus container (missing OggS header)."
+        }
+        val headMarker = "OpusHead".toByteArray(Charsets.US_ASCII)
+        val scanLimit = minOf(opusBytes.size, 256)
+        require(containsBytes(opusBytes, headMarker, scanLimit)) {
+            "Audio payload is missing OpusHead stream header (audio/ogg; codecs=opus required)."
+        }
+    }
+
+    fun validateWebpContainer(webpBytes: ByteArray) {
+        require(webpBytes.size >= 12) { "Sticker WebP payload is empty or invalid." }
+        val riff = String(webpBytes, 0, 4, Charsets.US_ASCII)
+        val webp = String(webpBytes, 8, 4, Charsets.US_ASCII)
+        require(riff == "RIFF" && webp == "WEBP") {
+            "Sticker image must be a valid RIFF/WEBP file."
+        }
+    }
+
+    fun validateDurationSeconds(durationSec: Double): Int {
+        require(durationSec > 0.0 && durationSec <= 10.5) {
+            "WhatsApp native sound stickers must be between $MIN_DURATION_SECONDS and $MAX_DURATION_SECONDS seconds (got ${"%.1f".format(durationSec)}s)."
+        }
+        val rounded = durationSec.roundToInt().coerceAtLeast(MIN_DURATION_SECONDS)
+        require(rounded in MIN_DURATION_SECONDS..MAX_DURATION_SECONDS) {
+            "WhatsApp native sound stickers must be between $MIN_DURATION_SECONDS and $MAX_DURATION_SECONDS seconds."
+        }
+        return rounded
+    }
+
+    /**
+     * Verifies the WebP EXIF chunk contains TIFF Big-Endian tag `0x5741` ("WA")
+     * with JSON referencing the exact `.opus` SHA-256 and `"is-from-user-created-pack": 1`.
+     */
+    fun validateWebpSoundExif(webpBytes: ByteArray, expectedSoundSha256Base64: String) {
+        val exifChunk = runCatching {
+            WebpMuxer.readChunks(webpBytes).firstOrNull { it.fourcc == "EXIF" }
+        }.getOrNull() ?: error("Sticker WebP is missing WhatsApp EXIF metadata.")
+
+        require(exifChunk.data.size >= 26) { "Sticker EXIF metadata is truncated." }
+        val buf = ByteBuffer.wrap(exifChunk.data).order(ByteOrder.BIG_ENDIAN)
+        val tag = buf.getShort(10).toInt() and 0xFFFF
+        require(tag == 0x5741) { "Sticker EXIF metadata is missing WhatsApp 0x5741 tag." }
+
+        val jsonText = String(exifChunk.data, 26, exifChunk.data.size - 26, Charsets.UTF_8)
+        require(jsonText.contains("\"sound-sha256\":\"$expectedSoundSha256Base64\"")) {
+            "Sticker EXIF sound-sha256 does not match the Opus audio SHA-256."
+        }
+        require(jsonText.contains("\"is-from-user-created-pack\":1")) {
+            "Sticker EXIF metadata is missing is-from-user-created-pack flag."
+        }
+    }
+
+    fun prepareSticker(input: RootStickerInput): PreparedRootSticker {
+        validateWebpContainer(input.webpBytes)
+        validateOpusPayload(input.opusBytes)
+        val durationSeconds = validateDurationSeconds(input.durationSec)
 
         val opusDigest = sha256Raw(input.opusBytes)
         val opusStandardBase64 = toStandardBase64(opusDigest)
@@ -119,6 +180,8 @@ object RootWhatsAppInjector {
             publisher = input.publisher,
             opusSha256StandardBase64 = opusStandardBase64
         )
+        validateWebpSoundExif(finalizedWebp, opusStandardBase64)
+
         val webpDigest = sha256Raw(finalizedWebp)
         val webpPlaintextHash = toStandardBase64(webpDigest)
         val webpFileName = "${toWhatsAppFileNameBase(webpDigest)}.webp"
@@ -134,7 +197,7 @@ object RootWhatsAppInjector {
             opusSha256Raw = opusDigest,
             opusSha256StandardBase64 = opusStandardBase64,
             audioFileName = audioFileName,
-            durationSeconds = input.durationSec.roundToInt().coerceAtLeast(1),
+            durationSeconds = durationSeconds,
             side = input.side.coerceAtLeast(1),
             emojis = input.emojis.ifBlank { "🔊" },
             waveform = input.waveform
@@ -151,8 +214,8 @@ object RootWhatsAppInjector {
             WebpMuxer.readChunks(webpBytes).firstOrNull { it.fourcc == "EXIF" }
         }.getOrNull()
 
-        if (existingExif != null) {
-            val text = String(existingExif.data, Charsets.UTF_8)
+        if (existingExif != null && existingExif.data.size > 26) {
+            val text = String(existingExif.data, 26, existingExif.data.size - 26, Charsets.UTF_8)
             val hasMatchingSound = text.contains("\"sound-sha256\":\"$opusSha256StandardBase64\"")
             val hasUserCreatedFlag = text.contains("\"is-from-user-created-pack\":1")
             if (hasMatchingSound && hasUserCreatedFlag) {
@@ -166,6 +229,36 @@ object RootWhatsAppInjector {
             publisher = publisher.ifBlank { "Audio Stickers" },
             soundSha256 = opusSha256StandardBase64
         )
+    }
+
+    /**
+     * Flushes WAL journal into `dbFile` and writes a clean standalone backup copy to `backupFile`.
+     */
+    fun createBackupAndCheckpoint(dbFile: File, backupFile: File) {
+        require(dbFile.exists() && dbFile.length() > 0L) { "Database file does not exist for backup" }
+        val db = SQLiteDatabase.openDatabase(
+            dbFile.absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READWRITE
+        )
+        try {
+            db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() }
+        } finally {
+            db.close()
+        }
+        backupFile.parentFile?.mkdirs()
+        dbFile.copyTo(backupFile, overwrite = true)
+        check(backupFile.exists() && backupFile.length() == dbFile.length()) {
+            "Failed to verify safety backup of stickers.db"
+        }
+    }
+
+    fun restoreDatabaseFromBackup(backupFile: File, targetDbFile: File) {
+        if (!backupFile.exists() || backupFile.length() == 0L) return
+        targetDbFile.parentFile?.mkdirs()
+        backupFile.copyTo(targetDbFile, overwrite = true)
+        File("${targetDbFile.absolutePath}-wal").delete()
+        File("${targetDbFile.absolutePath}-shm").delete()
     }
 
     suspend fun checkRootAccess(): Boolean = withContext(Dispatchers.IO) {
@@ -264,6 +357,10 @@ object RootWhatsAppInjector {
             if (stickers.isEmpty()) {
                 return@withContext Result.failure(IllegalArgumentException("No stickers to inject"))
             }
+
+            // 1. Validate media, duration (1..10s), EXIF, and SHA-256 hashes before touching root
+            val prepared = stickers.map { prepareSticker(it) }
+
             if (!checkRootAccess()) {
                 return@withContext Result.failure(
                     IllegalStateException("Root access (su -mm) was denied or is unavailable on this device.")
@@ -276,7 +373,6 @@ object RootWhatsAppInjector {
                     IllegalStateException("Could not locate WhatsApp stickers.db under /data/user/0/com.whatsapp.")
                 )
 
-            val prepared = stickers.map { prepareSticker(it) }
             workDir.mkdirs()
 
             val stagedDir = File(workDir, "staged").apply { mkdirs() }
@@ -287,10 +383,13 @@ object RootWhatsAppInjector {
 
             val localDbDir = File(workDir, "db").apply { mkdirs() }
             val localDbFile = File(localDbDir, "stickers.db")
+            val localBackupFile = File(localDbDir, "stickers.db.bak")
             val appUid = Process.myUid()
 
+            // 2. Force-stop WhatsApp and pull stickers.db + WAL/SHM into app-private temp storage
             val pullCmd = buildString {
                 append("am force-stop ${target.packageName} && ")
+                append("sleep 0.2 && ")
                 append("cp -f '${target.accountDir}/databases/stickers.db' '${localDbFile.absolutePath}' && ")
                 append("if [ -f '${target.accountDir}/databases/stickers.db-wal' ]; then cp -f '${target.accountDir}/databases/stickers.db-wal' '${localDbDir.absolutePath}/stickers.db-wal'; fi && ")
                 append("if [ -f '${target.accountDir}/databases/stickers.db-shm' ]; then cp -f '${target.accountDir}/databases/stickers.db-shm' '${localDbDir.absolutePath}/stickers.db-shm'; fi && ")
@@ -304,20 +403,39 @@ object RootWhatsAppInjector {
                 )
             }
 
-            injectIntoDatabase(
-                dbFile = localDbFile,
-                stickers = prepared,
-                packMetadata = packMetadata,
-                registerInStarred = registerInStarred
+            // 3. Checkpoint WAL into localDbFile and save verified safety backup before modifying
+            createBackupAndCheckpoint(localDbFile, localBackupFile)
+            val persistentBackupDir = File(context.filesDir, "root_backups").apply { mkdirs() }
+            val persistentBackup = File(
+                persistentBackupDir,
+                "stickers_${target.packageName}_${System.currentTimeMillis()}.db.bak"
             )
+            localBackupFile.copyTo(persistentBackup, overwrite = true)
+            pruneOldBackups(persistentBackupDir)
 
+            // 4. Modify localDbFile inside transaction; restore backup on any SQLite failure
+            try {
+                injectIntoDatabase(
+                    dbFile = localDbFile,
+                    stickers = prepared,
+                    packMetadata = packMetadata,
+                    registerInStarred = registerInStarred
+                )
+            } catch (dbErr: Throwable) {
+                restoreDatabaseFromBackup(localBackupFile, localDbFile)
+                return@withContext Result.failure(
+                    IllegalStateException("SQLite injection failed (rolled back cleanly): ${dbErr.message}", dbErr)
+                )
+            }
+
+            // 5. Copy sticker files + updated DB back to WhatsApp; rollback if any root write/permission fails
+            val acct = target.accountDir
+            val ug = target.uidGid
             val pushCmd = buildString {
-                val acct = target.accountDir
-                val ug = target.uidGid
                 append("am force-stop ${target.packageName} && ")
-                append("mkdir -p '$acct/files/Stickers' '$acct/files/StickerAudio' '$acct/files/SavedStickerAudio' && ")
-                append("chown $ug '$acct/files/Stickers' '$acct/files/StickerAudio' '$acct/files/SavedStickerAudio' && ")
-                append("chmod 700 '$acct/files/Stickers' '$acct/files/StickerAudio' '$acct/files/SavedStickerAudio' && ")
+                append("for d in '$acct/files/Stickers' '$acct/files/StickerAudio' '$acct/files/SavedStickerAudio'; do ")
+                append("mkdir -p \"${'$'}d\" && chown $ug \"${'$'}d\" && chmod 700 \"${'$'}d\" && [ -d \"${'$'}d\" ] || exit 11; ")
+                append("done && ")
                 for (item in prepared) {
                     val srcWebp = File(stagedDir, item.webpFileName).absolutePath
                     val srcOpus = File(stagedDir, item.audioFileName).absolutePath
@@ -329,7 +447,7 @@ object RootWhatsAppInjector {
                     append("cp -f '$srcOpus' '$dstAudio2' && ")
                     append("chown $ug '$dstWebp' '$dstAudio1' '$dstAudio2' && ")
                     append("chmod 600 '$dstWebp' '$dstAudio1' '$dstAudio2' && ")
-                    append("restorecon '$dstWebp' '$dstAudio1' '$dstAudio2' >/dev/null 2>&1 || true; ")
+                    append("restorecon '$dstWebp' '$dstAudio1' '$dstAudio2' >/dev/null 2>&1 || true && ")
                 }
                 append("cp -f '${localDbFile.absolutePath}' '$acct/databases/stickers.db' && ")
                 append("rm -f '$acct/databases/stickers.db-wal' '$acct/databases/stickers.db-shm' && ")
@@ -340,8 +458,24 @@ object RootWhatsAppInjector {
 
             val pushRes = execMountMaster(pushCmd)
             if (pushRes.exitCode != 0) {
+                val rollbackCmd = buildString {
+                    append("am force-stop ${target.packageName} ; ")
+                    append("cp -f '${localBackupFile.absolutePath}' '$acct/databases/stickers.db' && ")
+                    append("rm -f '$acct/databases/stickers.db-wal' '$acct/databases/stickers.db-shm' && ")
+                    append("chown $ug '$acct/databases/stickers.db' && ")
+                    append("chmod 600 '$acct/databases/stickers.db' && ")
+                    append("restorecon '$acct/databases/stickers.db' >/dev/null 2>&1 || true")
+                }
+                val rollbackRes = execMountMaster(rollbackCmd)
+                val rollbackNote = if (rollbackRes.exitCode == 0) {
+                    "Original stickers.db restored from backup."
+                } else {
+                    "Backup saved at ${persistentBackup.absolutePath}."
+                }
                 return@withContext Result.failure(
-                    IllegalStateException("Failed to write stickers to WhatsApp: ${pushRes.stderr.ifBlank { pushRes.stdout }}")
+                    IllegalStateException(
+                        "Failed to write stickers to WhatsApp ($rollbackNote): ${pushRes.stderr.ifBlank { pushRes.stdout }}"
+                    )
                 )
             }
 
@@ -361,7 +495,8 @@ object RootWhatsAppInjector {
                     accountDir = target.accountDir,
                     injectedCount = prepared.size,
                     primaryWebpFileName = prepared.first().webpFileName,
-                    primaryAudioFileName = prepared.first().audioFileName
+                    primaryAudioFileName = prepared.first().audioFileName,
+                    backupFilePath = persistentBackup.absolutePath
                 )
             )
         } catch (t: Throwable) {
@@ -503,6 +638,29 @@ object RootWhatsAppInjector {
         } finally {
             db.close()
         }
+    }
+
+    private fun pruneOldBackups(dir: File) {
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".db.bak") }
+            ?.sortedByDescending { it.lastModified() }
+            ?: return
+        files.drop(MAX_BACKUPS_TO_KEEP).forEach { runCatching { it.delete() } }
+    }
+
+    private fun containsBytes(haystack: ByteArray, needle: ByteArray, limit: Int): Boolean {
+        if (needle.isEmpty()) return true
+        val maxStart = minOf(haystack.size, limit) - needle.size
+        for (i in 0..maxStart) {
+            var matched = true
+            for (j in needle.indices) {
+                if (haystack[i + j] != needle[j]) {
+                    matched = false
+                    break
+                }
+            }
+            if (matched) return true
+        }
+        return false
     }
 
     private fun ensureStickerAudioTable(db: SQLiteDatabase) {

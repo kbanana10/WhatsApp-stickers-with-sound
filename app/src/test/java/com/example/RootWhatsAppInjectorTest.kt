@@ -10,6 +10,7 @@ import com.example.whatsapp.RootWhatsAppInjector
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,6 +21,23 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class RootWhatsAppInjectorTest {
+
+    private fun validFakeOggOpus(): ByteArray {
+        val out = ByteArray(48)
+        System.arraycopy("OggS".toByteArray(Charsets.US_ASCII), 0, out, 0, 4)
+        System.arraycopy("OpusHead".toByteArray(Charsets.US_ASCII), 0, out, 28, 8)
+        return out
+    }
+
+    private fun validFakeWebp(exif: ByteArray? = null): ByteArray {
+        val fakePayload = byteArrayOf(
+            'V'.code.toByte(), 'P'.code.toByte(), '8'.code.toByte(), 'L'.code.toByte(),
+            4, 0, 0, 0,
+            10, 20, 30, 40
+        )
+        val frame = WebpMuxer.EncodedFrame(payload = fakePayload, hasAlpha = true, durationMs = 100)
+        return WebpMuxer.buildAnimatedWebp(listOf(frame), exif = exif, side = 512)
+    }
 
     @Test
     fun base64Filename_replacesSlashWithDashAndKeepsPlusAndPadding() {
@@ -37,19 +55,8 @@ class RootWhatsAppInjectorTest {
 
     @Test
     fun prepareSticker_injectsUserCreatedExifAndComputesConsistentHashes() {
-        val fakePayload = byteArrayOf(
-            'V'.code.toByte(), 'P'.code.toByte(), '8'.code.toByte(), ' '.code.toByte(),
-            4, 0, 0, 0,
-            10, 20, 30, 40
-        )
-        val frame = WebpMuxer.EncodedFrame(payload = fakePayload, hasAlpha = false, durationMs = 100)
-        // Build initial WebP WITHOUT sound-sha256 or is-from-user-created-pack
-        val rawWebp = WebpMuxer.buildAnimatedWebp(
-            frames = listOf(frame),
-            exif = WebpMuxer.exifWhatsApp("TestPack", "Me", null),
-            side = 512
-        )
-        val fakeOpus = "OggS-fake-opus-payload".toByteArray()
+        val rawWebp = validFakeWebp(WebpMuxer.exifWhatsApp("TestPack", "Me", null))
+        val fakeOpus = validFakeOggOpus()
         val waveform = ByteArray(64) { (it % 100).toByte() }
 
         val prepared = RootWhatsAppInjector.prepareSticker(
@@ -83,6 +90,73 @@ class RootWhatsAppInjectorTest {
         assertEquals(RootWhatsAppInjector.toStandardBase64(actualWebpHash), prepared.webpPlaintextHash)
         assertEquals("${RootWhatsAppInjector.toWhatsAppFileNameBase(actualWebpHash)}.webp", prepared.webpFileName)
         assertEquals(3, prepared.durationSeconds)
+    }
+
+    @Test
+    fun prepareSticker_rejectsInvalidOpusOrOutOfRangeDuration() {
+        val rawWebp = validFakeWebp()
+        val validOpus = validFakeOggOpus()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            RootWhatsAppInjector.prepareSticker(
+                RootStickerInput(
+                    webpBytes = rawWebp,
+                    opusBytes = "NOT_OGG_AUDIO_DATA_AT_ALL_00000000".toByteArray(),
+                    durationSec = 2.0
+                )
+            )
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            RootWhatsAppInjector.prepareSticker(
+                RootStickerInput(
+                    webpBytes = rawWebp,
+                    opusBytes = validOpus,
+                    durationSec = 12.0
+                )
+            )
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            val badExifWebp = validFakeWebp(WebpMuxer.exifWhatsApp("P", "A", "wrong_hash"))
+            RootWhatsAppInjector.validateWebpSoundExif(badExifWebp, "expected_hash")
+        }
+    }
+
+    @Test
+    fun createBackupAndCheckpoint_and_restoreDatabaseFromBackup_recoversOriginalData() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbFile = File(context.cacheDir, "backup_test_${System.nanoTime()}.db")
+        val backupFile = File(context.cacheDir, "backup_test_${System.nanoTime()}.db.bak")
+
+        try {
+            val initDb = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+            initDb.enableWriteAheadLogging()
+            initDb.execSQL("CREATE TABLE sticker_audio (plaintext_hash TEXT PRIMARY KEY, file_sha256 BLOB NOT NULL, file_path TEXT NOT NULL, mimetype TEXT NOT NULL, duration_seconds INTEGER NOT NULL, file_length INTEGER NOT NULL, waveform BLOB)")
+            initDb.execSQL("INSERT INTO sticker_audio VALUES ('orig_hash', X'0102', 'orig.opus', 'audio/ogg; codecs=opus', 2, 128, NULL)")
+            initDb.close()
+
+            RootWhatsAppInjector.createBackupAndCheckpoint(dbFile, backupFile)
+            assertTrue(backupFile.exists() && backupFile.length() > 0L)
+
+            val corruptDb = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            corruptDb.execSQL("DELETE FROM sticker_audio")
+            corruptDb.close()
+
+            RootWhatsAppInjector.restoreDatabaseFromBackup(backupFile, dbFile)
+
+            val verifyDb = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            verifyDb.rawQuery("SELECT plaintext_hash FROM sticker_audio", null).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("orig_hash", c.getString(0))
+            }
+            verifyDb.close()
+        } finally {
+            dbFile.delete()
+            File("${dbFile.absolutePath}-wal").delete()
+            File("${dbFile.absolutePath}-shm").delete()
+            backupFile.delete()
+        }
     }
 
     @Test
@@ -155,17 +229,8 @@ class RootWhatsAppInjectorTest {
         initDb.close()
 
         try {
-            val fakePayload = byteArrayOf(
-                'V'.code.toByte(), 'P'.code.toByte(), '8'.code.toByte(), 'L'.code.toByte(),
-                4, 0, 0, 0,
-                1, 2, 3, 4
-            )
-            val rawWebp = WebpMuxer.buildAnimatedWebp(
-                frames = listOf(WebpMuxer.EncodedFrame(fakePayload, hasAlpha = true, durationMs = 90)),
-                exif = null,
-                side = 512
-            )
-            val fakeOpus = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9)
+            val rawWebp = validFakeWebp()
+            val fakeOpus = validFakeOggOpus()
             val waveform = ByteArray(64) { 42 }
             val prepared = RootWhatsAppInjector.prepareSticker(
                 RootStickerInput(

@@ -105,6 +105,7 @@ data class StudioUiState(
     val isExportingMp4: Boolean = false,
     val isRootAvailable: Boolean = false,
     val isInjectingRoot: Boolean = false,
+    val rootSafetyNoticeAccepted: Boolean = false,
     val generatedSticker: GeneratedSticker? = null,
     val generatedKey: String? = null,
 
@@ -176,8 +177,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 it.copy(
                     packName = prefs.defaultPackName,
                     publisher = prefs.defaultPublisher,
-                    syncOffsetMs = prefs.syncOffsetMs
+                    syncOffsetMs = prefs.syncOffsetMs,
+                    rootSafetyNoticeAccepted = prefs.rootSafetyNoticeAccepted
                 )
+            }
+            prefsRepo.preferences.collect { updated ->
+                _uiState.update {
+                    it.copy(rootSafetyNoticeAccepted = updated.rootSafetyNoticeAccepted)
+                }
             }
         }
         viewModelScope.launch {
@@ -871,6 +878,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
         }
+    }
+
+    fun acceptRootSafetyNotice() {
+        _uiState.update { it.copy(rootSafetyNoticeAccepted = true) }
+        viewModelScope.launch { prefsRepo.setRootSafetyNoticeAccepted(true) }
     }
 
     fun clearMessages() {

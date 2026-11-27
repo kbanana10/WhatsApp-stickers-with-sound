@@ -43,6 +43,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +58,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.local.StickerEntity
 import com.example.i18n.Strings
+import com.example.ui.components.RootSafetyNoticeDialog
 import com.example.ui.components.formatKb
 import com.example.ui.components.formatSec
 import com.example.ui.theme.MonoFontFamily
@@ -75,7 +79,13 @@ fun PackDetailScreen(
     val isSuccessFeedback by viewModel.isSuccessFeedback.collectAsStateWithLifecycle()
     val isRootAvailable by viewModel.isRootAvailable.collectAsStateWithLifecycle()
     val isInjectingRoot by viewModel.isInjectingRoot.collectAsStateWithLifecycle()
+    val rootSafetyAccepted by viewModel.rootSafetyNoticeAccepted.collectAsStateWithLifecycle()
+    var pendingRootAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val context = LocalContext.current
+
+    fun runWithSafetyNotice(action: () -> Unit) {
+        if (rootSafetyAccepted) action() else pendingRootAction = action
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -115,11 +125,13 @@ fun PackDetailScreen(
                     if (isRootAvailable) {
                         Button(
                             onClick = {
-                                viewModel.injectPackWithRoot(
-                                    packWithStickers = p,
-                                    successTemplate = strings.rootInjectSuccessPack,
-                                    noAudioPackMsg = strings.rootNoAudioPackError
-                                )
+                                runWithSafetyNotice {
+                                    viewModel.injectPackWithRoot(
+                                        packWithStickers = p,
+                                        successTemplate = strings.rootInjectSuccessPack,
+                                        noAudioPackMsg = strings.rootNoAudioPackError
+                                    )
+                                }
                             },
                             enabled = p.stickers.isNotEmpty() && !isInjectingRoot,
                             colors = ButtonDefaults.buttonColors(
@@ -222,14 +234,16 @@ fun PackDetailScreen(
                         strings = strings,
                         onPlayToggle = { viewModel.playStickerSound(sticker) },
                         onRootInject = {
-                            val packMeta = packWithStickers?.pack
-                            viewModel.injectStickerWithRoot(
-                                sticker = sticker,
-                                packName = packMeta?.name ?: "Audio Stickers",
-                                publisher = packMeta?.publisher ?: "Audio Stickers",
-                                successTemplate = strings.rootInjectSuccessSingle,
-                                missingOpusMsg = strings.rootMissingOpusError
-                            )
+                            runWithSafetyNotice {
+                                val packMeta = packWithStickers?.pack
+                                viewModel.injectStickerWithRoot(
+                                    sticker = sticker,
+                                    packName = packMeta?.name ?: "Audio Stickers",
+                                    publisher = packMeta?.publisher ?: "Audio Stickers",
+                                    successTemplate = strings.rootInjectSuccessSingle,
+                                    missingOpusMsg = strings.rootMissingOpusError
+                                )
+                            }
                         },
                         onShare = { viewModel.shareStickerMp4OrRaw(context, sticker, strings.shareMp4WaBtn) },
                         onDelete = { viewModel.deleteSticker(sticker) }
@@ -237,6 +251,18 @@ fun PackDetailScreen(
                 }
             }
         }
+    }
+
+    pendingRootAction?.let { action ->
+        RootSafetyNoticeDialog(
+            strings = strings,
+            onDismiss = { pendingRootAction = null },
+            onConfirm = {
+                pendingRootAction = null
+                viewModel.acceptRootSafetyNotice()
+                action()
+            }
+        )
     }
 }
 

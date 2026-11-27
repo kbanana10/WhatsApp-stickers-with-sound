@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
 import com.example.data.local.StickerEntity
 import com.example.data.local.StickerPackWithStickers
+import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.StickerPackRepository
 import com.example.whatsapp.RootPackMetadata
 import com.example.whatsapp.RootStickerInput
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -26,6 +28,7 @@ import java.io.File
 class PacksViewModel(application: Application) : AndroidViewModel(application) {
 
     private val appContext = application.applicationContext
+    private val prefsRepo = UserPreferencesRepository(appContext)
     val repository = StickerPackRepository(
         appContext,
         AppDatabase.getInstance(appContext).stickerDao()
@@ -33,6 +36,10 @@ class PacksViewModel(application: Application) : AndroidViewModel(application) {
 
     val packs: StateFlow<List<StickerPackWithStickers>> = repository.packsWithStickers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val rootSafetyNoticeAccepted: StateFlow<Boolean> = prefsRepo.preferences
+        .map { it.rootSafetyNoticeAccepted }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _playingStickerId = MutableStateFlow<Long?>(null)
     val playingStickerId: StateFlow<Long?> = _playingStickerId.asStateFlow()
@@ -242,6 +249,10 @@ class PacksViewModel(application: Application) : AndroidViewModel(application) {
                 _feedbackMessage.value = err.message ?: "Root injection failed"
             }
         }
+    }
+
+    fun acceptRootSafetyNotice() {
+        viewModelScope.launch { prefsRepo.setRootSafetyNoticeAccepted(true) }
     }
 
     fun clearFeedback() {
