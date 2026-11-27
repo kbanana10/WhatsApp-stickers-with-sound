@@ -1,8 +1,10 @@
 package com.example.whatsapp
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -24,6 +26,45 @@ object WhatsAppBridge {
 
     private const val WHATSAPP_PACKAGE = "com.whatsapp"
     private const val WHATSAPP_BUSINESS_PACKAGE = "com.whatsapp.w4b"
+
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+
+    private fun startIntentSafely(context: Context, intent: Intent): Result<Unit> {
+        val activity = context.findActivity()
+        val targetContext = activity ?: context
+        if (activity == null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            targetContext.startActivity(intent)
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private fun startChooserSafely(context: Context, innerIntent: Intent, title: String): Result<Unit> {
+        val activity = context.findActivity()
+        val targetContext = activity ?: context
+        if (activity == null) {
+            innerIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(innerIntent, title).apply {
+            if (activity == null) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+        return try {
+            targetContext.startActivity(chooser)
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
 
     fun findInstalledWhatsAppPackage(context: Context): String? {
         val pm = context.packageManager
@@ -52,73 +93,62 @@ object WhatsAppBridge {
             putExtra(EXTRA_PACK_ID, packId)
             putExtra(EXTRA_AUTHORITY, StickerContentProvider.AUTHORITY)
             putExtra(EXTRA_PACK_NAME, packName)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
 
     fun launchAddPackToWhatsApp(context: Context, packId: String, packName: String): Result<Unit> {
-        val intent = buildEnableStickerPackIntent(packId, packName)
         val waPkg = findInstalledWhatsAppPackage(context)
-        if (waPkg != null) {
-            intent.`package` = waPkg
+            ?: return Result.failure(ActivityNotFoundException("WhatsApp is not installed"))
+        val pinned = buildEnableStickerPackIntent(packId, packName).apply {
+            `package` = waPkg
         }
-        return try {
-            context.startActivity(intent)
-            Result.success(Unit)
-        } catch (e: ActivityNotFoundException) {
-            // Fallback without package pin in case chooser handles it
-            try {
-                context.startActivity(buildEnableStickerPackIntent(packId, packName))
-                Result.success(Unit)
-            } catch (e2: Exception) {
-                Result.failure(e2)
-            }
-        }
+        val firstAttempt = startIntentSafely(context, pinned)
+        if (firstAttempt.isSuccess) return firstAttempt
+
+        return startIntentSafely(context, buildEnableStickerPackIntent(packId, packName))
     }
 
     fun shareMp4ToWhatsApp(context: Context, mp4File: File, chooserTitle: String): Result<Unit> {
-        val uri = fileToContentUri(context, mp4File)
+        val uri = try {
+            fileToContentUri(context, mp4File)
+        } catch (t: Throwable) {
+            return Result.failure(t)
+        }
         val waPkg = findInstalledWhatsAppPackage(context)
-        val intent = Intent(Intent.ACTION_SEND).apply {
+        if (waPkg != null) {
+            val directIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage(waPkg)
+            }
+            val directRes = startIntentSafely(context, directIntent)
+            if (directRes.isSuccess) return directRes
+        }
+        val generic = Intent(Intent.ACTION_SEND).apply {
             type = "video/mp4"
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (waPkg != null) setPackage(waPkg)
         }
-        return try {
-            context.startActivity(Intent.createChooser(intent, chooserTitle))
-            Result.success(Unit)
-        } catch (e: Exception) {
-            // Fallback generic share chooser
-            try {
-                val generic = Intent(Intent.ACTION_SEND).apply {
-                    type = "video/mp4"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                context.startActivity(Intent.createChooser(generic, chooserTitle))
-                Result.success(Unit)
-            } catch (e2: Exception) {
-                Result.failure(e2)
-            }
-        }
+        return startChooserSafely(context, generic, chooserTitle)
     }
 
     fun shareRawPair(context: Context, webpFile: File, oggFile: File, chooserTitle: String): Result<Unit> {
-        val uris = arrayListOf(
-            fileToContentUri(context, webpFile),
-            fileToContentUri(context, oggFile)
-        )
+        val uris = try {
+            arrayListOf(
+                fileToContentUri(context, webpFile),
+                fileToContentUri(context, oggFile)
+            )
+        } catch (t: Throwable) {
+            return Result.failure(t)
+        }
         val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
             type = "*/*"
             putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        return try {
-            context.startActivity(Intent.createChooser(intent, chooserTitle))
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return startChooserSafely(context, intent, chooserTitle)
     }
 
     suspend fun saveMp4ToGallery(context: Context, mp4File: File, baseName: String): Result<Uri> =

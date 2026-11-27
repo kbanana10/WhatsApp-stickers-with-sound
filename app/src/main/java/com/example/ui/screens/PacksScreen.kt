@@ -318,7 +318,7 @@ private fun PackCard(
 
             Button(
                 onClick = {
-                    viewModel.addPackToWhatsApp(pack.packId, pack.name, strings.whatsappNotInstalled)
+                    viewModel.addPackToWhatsApp(context, pack.packId, pack.name, strings.whatsappNotInstalled)
                 },
                 enabled = readyForWhatsApp,
                 colors = ButtonDefaults.buttonColors(

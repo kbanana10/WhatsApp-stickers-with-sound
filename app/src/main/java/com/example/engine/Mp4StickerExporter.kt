@@ -91,7 +91,7 @@ object Mp4StickerExporter {
                 MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
             )
-            setInteger(MediaFormat.KEY_BIT_RATE, (side * side * 3).coerceIn(250_000, 1_500_000))
+            setInteger(MediaFormat.KEY_BIT_RATE, (side * side * 8).coerceIn(800_000, 2_500_000))
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
@@ -159,7 +159,7 @@ object Mp4StickerExporter {
             1
         ).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, 96_000)
+            setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16_384)
         }
         val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)

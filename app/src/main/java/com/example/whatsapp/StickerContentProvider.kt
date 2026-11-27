@@ -128,8 +128,9 @@ class StickerContentProvider : ContentProvider() {
         val packId = segments[1]
         val fileName = segments[2]
         val ctx = context ?: return null
-        val file = File(File(ctx.filesDir, "stickers/$packId"), fileName)
-        if (!file.exists()) return null
+        val packDir = File(ctx.filesDir, "stickers/$packId").canonicalFile
+        val file = File(packDir, fileName).canonicalFile
+        if (!file.path.startsWith(packDir.path + File.separator) || !file.exists()) return null
         val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         return AssetFileDescriptor(pfd, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
     }

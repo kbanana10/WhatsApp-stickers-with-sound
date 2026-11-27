@@ -68,6 +68,7 @@ fun PackDetailScreen(
 ) {
     val packWithStickers by viewModel.observePack(packId).collectAsStateWithLifecycle(initialValue = null)
     val playingId by viewModel.playingStickerId.collectAsStateWithLifecycle()
+    val feedback by viewModel.feedbackMessage.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     Scaffold(
@@ -106,7 +107,7 @@ fun PackDetailScreen(
                 ) {
                     Button(
                         onClick = {
-                            viewModel.addPackToWhatsApp(p.pack.packId, p.pack.name, strings.whatsappNotInstalled)
+                            viewModel.addPackToWhatsApp(context, p.pack.packId, p.pack.name, strings.whatsappNotInstalled)
                         },
                         enabled = p.stickers.size in 3..30,
                         colors = ButtonDefaults.buttonColors(
@@ -128,18 +129,36 @@ fun PackDetailScreen(
         }
     ) { innerPadding ->
         val stickers = packWithStickers?.stickers.orEmpty()
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentAlignment = Alignment.TopCenter
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            feedback?.let { msg ->
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(12.dp),
+                    onClick = { viewModel.clearFeedback() },
+                    modifier = Modifier
+                        .widthIn(max = 680.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 156.dp),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.widthIn(max = 680.dp).fillMaxSize()
+                modifier = Modifier.widthIn(max = 680.dp).weight(1f).fillMaxWidth()
             ) {
                 items(stickers, key = { it.id }) { sticker ->
                     StickerItemCard(
@@ -149,7 +168,7 @@ fun PackDetailScreen(
                         context = context,
                         strings = strings,
                         onPlayToggle = { viewModel.playStickerSound(sticker) },
-                        onShare = { viewModel.shareStickerMp4OrRaw(sticker, strings.shareMp4WaBtn) },
+                        onShare = { viewModel.shareStickerMp4OrRaw(context, sticker, strings.shareMp4WaBtn) },
                         onDelete = { viewModel.deleteSticker(sticker) }
                     )
                 }

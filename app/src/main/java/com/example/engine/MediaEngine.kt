@@ -53,6 +53,7 @@ data class AnalysisResult(
     val sourceKind: SourceKind,
     val framingMode: FramingMode,
     val fitMode: MixFitMode,
+    val sizeCapMode: SizeCapMode,
     val durationSec: Double,
     val visualDurationSec: Double,
     val audioDurationSec: Double,
@@ -155,6 +156,7 @@ object MediaEngine {
         audioDurationSec: Double,
         framingMode: FramingMode,
         fitMode: MixFitMode,
+        sizeCapMode: SizeCapMode = SizeCapMode.MAX_QUALITY_1MB,
         onProgress: (Float) -> Unit
     ): AnalysisResult = withContext(Dispatchers.Default) {
         val t0 = System.currentTimeMillis()
@@ -184,6 +186,7 @@ object MediaEngine {
                 sourceKind = sourceKind,
                 framingMode = framingMode,
                 fitMode = fitMode,
+                sizeCapMode = sizeCapMode,
                 durationSec = audioDurationSec,
                 visualDurationSec = audioDurationSec,
                 audioDurationSec = audioDurationSec,
@@ -315,9 +318,10 @@ object MediaEngine {
                 val qDefault = StickerLimits.Q_BY_SIDE[side] ?: 0.5f
                 val est = ((qMap[qDefault] ?: 0.0) + overhead) * n + 400
                 val estMin = ((qMap[StickerLimits.Q_MIN] ?: 0.0) + overhead) * n + 400
+                val safeLimit = sizeCapMode.safeBytes
                 val status = when {
-                    est <= StickerLimits.SAFE_BYTES -> CellStatus.OK
-                    estMin <= StickerLimits.SAFE_BYTES -> CellStatus.LOW_QUALITY
+                    est <= safeLimit -> CellStatus.OK
+                    estMin <= safeLimit -> CellStatus.LOW_QUALITY
                     else -> CellStatus.OVER_LIMIT
                 }
                 cells.add(
@@ -341,6 +345,7 @@ object MediaEngine {
             sourceKind = sourceKind,
             framingMode = framingMode,
             fitMode = fitMode,
+            sizeCapMode = sizeCapMode,
             durationSec = stickerDur,
             visualDurationSec = vDur,
             audioDurationSec = audioDurationSec,
@@ -370,6 +375,8 @@ object MediaEngine {
         stillExperimental: Boolean,
         packName: String,
         publisher: String,
+        compressionMode: CompressionMode = CompressionMode.AUTO,
+        sizeCapMode: SizeCapMode = analysis.sizeCapMode,
         onProgress: (Float) -> Unit
     ): GeneratedSticker = withContext(Dispatchers.Default) {
         val t0 = System.currentTimeMillis()
@@ -398,7 +405,7 @@ object MediaEngine {
 
             val exif = WebpMuxer.exifWhatsApp(packName, publisher, soundSha)
             val plan = buildPlan(analysis.frames.size, analysis.durationSec, fps, analysis.captureFps)
-            val qStart = StickerLimits.Q_BY_SIDE[side] ?: 0.5f
+            val qStart = compressionMode.targetQualityOverride ?: (StickerLimits.Q_BY_SIDE[side] ?: 0.5f)
             val qList = buildList {
                 var q = qStart
                 while (q >= StickerLimits.Q_MIN - 1e-4f) {
@@ -414,61 +421,25 @@ object MediaEngine {
 
             for (q in qList) {
                 coroutineContext.ensureActive()
-                // Deduplicate plan slots before parallel frame encoding
-                val grouped = mutableListOf<Pair<CapturedFrame, Int>>()
-                for (slot in plan) {
-                    val cf = analysis.frames[slot.index]
-                    if (grouped.isNotEmpty()) {
-                        val prev = grouped.last()
-                        if (prev.first === cf || prev.first.fingerprint.contentEquals(cf.fingerprint)) {
-                            grouped[grouped.lastIndex] = prev.copy(second = prev.second + slot.durationMs)
-                            continue
-                        }
-                    }
-                    grouped.add(cf to slot.durationMs)
-                }
-
-                val uniqueRefs = grouped.map { it.first }.distinct()
-                val encodedMap = coroutineScope {
-                    uniqueRefs.map { cf ->
-                        async {
-                            semaphore.withPermit {
-                                coroutineContext.ensureActive()
-                                val bmp = if (cf.bitmap.width == side && cf.bitmap.height == side) {
-                                    cf.bitmap
-                                } else {
-                                    Bitmap.createScaledBitmap(cf.bitmap, side, side, true)
-                                }
-                                val enc = WebpMuxer.encodeStaticFrame(bmp, q)
-                                if (bmp !== cf.bitmap) bmp.recycle()
-                                cf to enc
-                            }
-                        }
-                    }.awaitAll().toMap()
-                }
-
-                val assembled = grouped.mapIndexed { idx, (cf, durMs) ->
-                    val base = encodedMap.getValue(cf)
-                    val finalDur = if (idx == 0 && syncOffsetMs > 0 && !isStill) {
-                        durMs + syncOffsetMs
-                    } else durMs
-                    base.copy(durationMs = finalDur)
-                }
-
-                val webp = if (isStill) {
-                    WebpMuxer.buildStillWebp(assembled.first(), exif, side)
-                } else {
-                    WebpMuxer.buildAnimatedWebp(assembled, exif, side)
-                }
+                val webp = encodePlanToWebp(
+                    frames = analysis.frames,
+                    plan = plan,
+                    side = side,
+                    quality = q,
+                    syncOffsetMs = syncOffsetMs,
+                    isStill = isStill,
+                    exif = exif,
+                    semaphore = semaphore
+                )
                 bestBytes = webp
                 bestQ = q
                 onProgress(0.85f)
-                if (webp.size <= StickerLimits.MAX_STICKER_BYTES) break
+                if (webp.size <= sizeCapMode.maxBytes) break
             }
 
             val finalWebp = bestBytes ?: error("Failed to encode WebP")
-            require(finalWebp.size <= StickerLimits.MAX_STICKER_BYTES) {
-                "Sticker exceeds 1 MB (${finalWebp.size / 1000} KB). Pick lower FPS or resolution."
+            require(finalWebp.size <= sizeCapMode.maxBytes) {
+                "Sticker exceeds ${sizeCapMode.maxBytes / 1000} KB (${finalWebp.size / 1000} KB). Pick lower FPS or resolution."
             }
 
             val cell = analysis.cells.firstOrNull { it.side == side && it.fps == fps }
@@ -495,6 +466,148 @@ object MediaEngine {
                 packName = packName.trim(),
                 publisher = publisher.trim()
             )
+        }
+    }
+
+    /**
+     * Ensures a sticker saved to a local WhatsApp Android Pack strictly meets WhatsApp's
+     * ENABLE_STICKER_PACK rules: exact 512x512 dimensions, <= 500 KB animated (<= 10s),
+     * and animated WebP structure (ANIM/ANMF) when placed inside an animated pack.
+     */
+    suspend fun buildWhatsAppPackWebp(
+        analysis: AnalysisResult?,
+        generated: GeneratedSticker,
+        packName: String,
+        publisher: String
+    ): ByteArray = withContext(Dispatchers.Default) {
+        val alreadyCompliant = generated.side == StickerLimits.SIDE &&
+            generated.webpBytes.size <= StickerLimits.WA_PACK_SAFE_ANIMATED_BYTES &&
+            generated.durationSec <= 10.0 &&
+            generated.isAnimated
+        if (alreadyCompliant) {
+            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+        }
+
+        val exif = WebpMuxer.exifWhatsApp(packName, publisher, generated.soundSha256)
+        if (analysis == null || analysis.frames.isEmpty()) {
+            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+        }
+
+        val semaphore = Semaphore(cpuCores)
+        // Still image -> 2-frame 512x512 animated WebP so all stickers in animated pack share ANIM format
+        if (analysis.frames.size == 1) {
+            val single = analysis.frames.first()
+            val bmp = if (single.bitmap.width == StickerLimits.SIDE && single.bitmap.height == StickerLimits.SIDE) {
+                single.bitmap
+            } else {
+                Bitmap.createScaledBitmap(single.bitmap, StickerLimits.SIDE, StickerLimits.SIDE, true)
+            }
+            for (q in listOf(0.80f, 0.65f, 0.45f, 0.30f)) {
+                val enc = WebpMuxer.encodeStaticFrame(bmp, q)
+                val frames = listOf(enc.copy(durationMs = 500), enc.copy(durationMs = 500))
+                val webp = WebpMuxer.buildAnimatedWebp(frames, exif, StickerLimits.SIDE)
+                if (webp.size <= StickerLimits.WA_PACK_SAFE_ANIMATED_BYTES) {
+                    if (bmp !== single.bitmap) bmp.recycle()
+                    return@withContext webp
+                }
+            }
+            val fallback = WebpMuxer.encodeStaticFrame(bmp, 0.20f)
+            if (bmp !== single.bitmap) bmp.recycle()
+            return@withContext WebpMuxer.buildAnimatedWebp(
+                listOf(fallback.copy(durationMs = 500), fallback.copy(durationMs = 500)),
+                exif,
+                StickerLimits.SIDE
+            )
+        }
+
+        // Animated clip: clip duration <= 9.8s and adapt FPS + quality to guarantee 512x512 <= 485 KB
+        val safeDur = min(analysis.durationSec, 9.8).coerceAtLeast(0.5)
+        val fpsCandidates = listOf(generated.fps, 20, 15, 12, 10, 8, 6, 5)
+            .filter { it <= analysis.captureFps }
+            .distinct()
+            .sortedDescending()
+            .ifEmpty { listOf(min(analysis.captureFps, 12).coerceAtLeast(5)) }
+
+        var smallestWebp: ByteArray? = null
+        for (candidateFps in fpsCandidates) {
+            val plan = buildPlan(analysis.frames.size, safeDur, candidateFps, analysis.captureFps)
+            for (q in listOf(0.65f, 0.50f, 0.35f, 0.25f, 0.16f)) {
+                coroutineContext.ensureActive()
+                val webp = encodePlanToWebp(
+                    frames = analysis.frames,
+                    plan = plan,
+                    side = StickerLimits.SIDE,
+                    quality = q,
+                    syncOffsetMs = 0,
+                    isStill = false,
+                    exif = exif,
+                    semaphore = semaphore
+                )
+                if (smallestWebp == null || webp.size < smallestWebp.size) {
+                    smallestWebp = webp
+                }
+                if (webp.size <= StickerLimits.WA_PACK_SAFE_ANIMATED_BYTES) {
+                    return@withContext webp
+                }
+            }
+        }
+        smallestWebp ?: WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+    }
+
+    private suspend fun encodePlanToWebp(
+        frames: List<CapturedFrame>,
+        plan: List<PlanSlot>,
+        side: Int,
+        quality: Float,
+        syncOffsetMs: Int,
+        isStill: Boolean,
+        exif: ByteArray,
+        semaphore: Semaphore
+    ): ByteArray {
+        val grouped = mutableListOf<Pair<CapturedFrame, Int>>()
+        for (slot in plan) {
+            val cf = frames[slot.index]
+            if (grouped.isNotEmpty()) {
+                val prev = grouped.last()
+                if (prev.first === cf || prev.first.fingerprint.contentEquals(cf.fingerprint)) {
+                    grouped[grouped.lastIndex] = prev.copy(second = prev.second + slot.durationMs)
+                    continue
+                }
+            }
+            grouped.add(cf to slot.durationMs)
+        }
+
+        val uniqueRefs = grouped.map { it.first }.distinct()
+        val encodedMap = coroutineScope {
+            uniqueRefs.map { cf ->
+                async {
+                    semaphore.withPermit {
+                        coroutineContext.ensureActive()
+                        val bmp = if (cf.bitmap.width == side && cf.bitmap.height == side) {
+                            cf.bitmap
+                        } else {
+                            Bitmap.createScaledBitmap(cf.bitmap, side, side, true)
+                        }
+                        val enc = WebpMuxer.encodeStaticFrame(bmp, quality)
+                        if (bmp !== cf.bitmap) bmp.recycle()
+                        cf to enc
+                    }
+                }
+            }.awaitAll().toMap()
+        }
+
+        val assembled = grouped.mapIndexed { idx, (cf, durMs) ->
+            val base = encodedMap.getValue(cf)
+            val finalDur = if (idx == 0 && syncOffsetMs > 0 && !isStill) {
+                durMs + syncOffsetMs
+            } else durMs
+            base.copy(durationMs = finalDur)
+        }
+
+        return if (isStill) {
+            WebpMuxer.buildStillWebp(assembled.first(), exif, side)
+        } else {
+            WebpMuxer.buildAnimatedWebp(assembled, exif, side)
         }
     }
 

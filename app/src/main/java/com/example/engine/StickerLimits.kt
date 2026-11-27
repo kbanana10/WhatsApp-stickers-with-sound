@@ -20,6 +20,18 @@ enum class MixFitMode {
     FREEZE
 }
 
+enum class SizeCapMode(val maxBytes: Int, val safeBytes: Int) {
+    WHATSAPP_PACK_500KB(500_000, 465_000),
+    MAX_QUALITY_1MB(1_000_000, 900_000)
+}
+
+enum class CompressionMode(val targetQualityOverride: Float?) {
+    AUTO(null),
+    HIGH(0.85f),
+    BALANCED(0.65f),
+    COMPACT(0.40f)
+}
+
 enum class CellStatus {
     OK,
     LOW_QUALITY,
@@ -40,6 +52,9 @@ object StickerLimits {
     const val SIDE = 512
     const val MAX_STICKER_BYTES = 1_000_000
     const val SAFE_BYTES = 900_000
+    const val WA_PACK_MAX_ANIMATED_BYTES = 500_000
+    const val WA_PACK_SAFE_ANIMATED_BYTES = 470_000
+    const val WA_PACK_MAX_STATIC_BYTES = 100_000
     const val MAX_AUDIO_BYTES = 1_000_000
     const val SAMPLE_RATE = 48_000
     const val CAPTURE_MEM_BYTES = 120_000_000L

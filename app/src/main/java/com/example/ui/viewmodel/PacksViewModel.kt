@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.media.MediaPlayer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -59,25 +60,32 @@ class PacksViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addPackToWhatsApp(packId: String, packName: String, notInstalledMsg: String) {
-        WhatsAppBridge.launchAddPackToWhatsApp(appContext, packId, packName)
-            .onFailure {
-                _feedbackMessage.value = notInstalledMsg
+    fun addPackToWhatsApp(uiContext: Context, packId: String, packName: String, notInstalledMsg: String) {
+        WhatsAppBridge.launchAddPackToWhatsApp(uiContext, packId, packName)
+            .onFailure { err ->
+                val isNotInstalled = err is android.content.ActivityNotFoundException
+                _feedbackMessage.value = if (isNotInstalled) {
+                    notInstalledMsg
+                } else {
+                    err.message ?: notInstalledMsg
+                }
             }
     }
 
-    fun shareStickerMp4OrRaw(sticker: StickerEntity, chooserTitle: String) {
+    fun shareStickerMp4OrRaw(uiContext: Context, sticker: StickerEntity, chooserTitle: String) {
         val mp4Name = sticker.mp4FileName
         if (mp4Name != null) {
             val mp4File = repository.stickerFile(sticker.packId, mp4Name)
             if (mp4File.exists()) {
-                WhatsAppBridge.shareMp4ToWhatsApp(appContext, mp4File, chooserTitle)
+                WhatsAppBridge.shareMp4ToWhatsApp(uiContext, mp4File, chooserTitle)
+                    .onFailure { err -> _feedbackMessage.value = err.message }
                 return
             }
         }
         val webpFile = repository.stickerFile(sticker.packId, sticker.fileName)
         val oggFile = repository.stickerFile(sticker.packId, sticker.oggFileName)
-        WhatsAppBridge.shareRawPair(appContext, webpFile, oggFile, chooserTitle)
+        WhatsAppBridge.shareRawPair(uiContext, webpFile, oggFile, chooserTitle)
+            .onFailure { err -> _feedbackMessage.value = err.message }
     }
 
     fun playStickerSound(sticker: StickerEntity) {

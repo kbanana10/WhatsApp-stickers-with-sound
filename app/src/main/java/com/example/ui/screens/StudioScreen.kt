@@ -81,6 +81,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -88,11 +89,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.engine.CellStatus
+import com.example.engine.CompressionMode
 import com.example.engine.FramingMode
 import com.example.engine.MediaEngine
 import com.example.engine.MixFitMode
+import com.example.engine.SizeCapMode
 import com.example.i18n.Strings
 import com.example.ui.components.QualityMatrixGrid
+import com.example.ui.components.QualityPresetRow
 import com.example.ui.components.SaveToPackDialog
 import com.example.ui.components.StickerPreviewBox
 import com.example.ui.components.TimelineTrimmer
@@ -699,6 +703,49 @@ private fun FormatSectionContent(
         }
     }
 
+    // Size target mode (WhatsApp 500 KB Pack vs 1 MB Max Quality)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(strings.sizeCapLabel, style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = state.sizeCapMode == SizeCapMode.MAX_QUALITY_1MB,
+                onClick = { viewModel.setSizeCapMode(SizeCapMode.MAX_QUALITY_1MB) },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+            ) {
+                Text(strings.sizeCap1Mb, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+            }
+            SegmentedButton(
+                selected = state.sizeCapMode == SizeCapMode.WHATSAPP_PACK_500KB,
+                onClick = { viewModel.setSizeCapMode(SizeCapMode.WHATSAPP_PACK_500KB) },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+            ) {
+                Text(strings.sizeCap500Kb, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+
+    // Compression / WebP quality level selector
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(strings.compressionLabel, style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            val compOptions = listOf(
+                CompressionMode.AUTO to strings.compAuto,
+                CompressionMode.HIGH to strings.compHigh,
+                CompressionMode.BALANCED to strings.compBalanced,
+                CompressionMode.COMPACT to strings.compCompact
+            )
+            compOptions.forEachIndexed { idx, (mode, label) ->
+                SegmentedButton(
+                    selected = state.compressionMode == mode,
+                    onClick = { viewModel.setCompressionMode(mode) },
+                    shape = SegmentedButtonDefaults.itemShape(index = idx, count = compOptions.size)
+                ) {
+                    Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+
     // Multi-core compute button + speed pill
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -746,9 +793,18 @@ private fun FormatSectionContent(
         )
     }
 
-    // Selected cell summary + toggle matrix
+    // Available quality presets + selected summary + matrix
     state.analysis?.let { an ->
+        QualityPresetRow(
+            analysis = an,
+            selectedSide = state.selectedSide,
+            selectedFps = state.selectedFps,
+            strings = strings,
+            onSelectCell = viewModel::selectGridCell
+        )
+
         val selCell = an.cells.firstOrNull { it.side == state.selectedSide && it.fps == state.selectedFps }
+        val isRecommended = an.recommended?.side == state.selectedSide && an.recommended?.fps == state.selectedFps
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -756,11 +812,13 @@ private fun FormatSectionContent(
         ) {
             Text(
                 text = if (selCell != null) {
-                    "★ ${selCell.side}px · ${selCell.fps}fps · ~${formatKb(selCell.estBytes)} (${an.elapsedMs}ms)"
+                    val starPrefix = if (isRecommended) "★ " else ""
+                    "$starPrefix${selCell.side}px · ${selCell.fps}fps · ~${formatKb(selCell.estBytes)} (${an.elapsedMs}ms)"
                 } else strings.noCellFits,
                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFontFamily),
                 color = if (selCell?.status == CellStatus.LOW_QUALITY) MaterialTheme.colorScheme.tertiary
-                else MaterialTheme.colorScheme.secondary
+                else MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.weight(1f)
             )
             TextButton(
                 onClick = viewModel::toggleMatrixVisible,
@@ -847,6 +905,7 @@ private fun CreateAndExportSection(
     viewModel: StudioViewModel,
     onOpenSaveDialog: () -> Unit
 ) {
+    val uiContext = LocalContext.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -996,6 +1055,7 @@ private fun CreateAndExportSection(
                 Button(
                     onClick = {
                         viewModel.exportAndShareMp4(
+                            uiContext = uiContext,
                             chooserTitle = strings.shareMp4WaBtn,
                             shareDirectlyToWhatsApp = true,
                             galleryMsg = strings.savedToGalleryMsg
@@ -1032,6 +1092,7 @@ private fun CreateAndExportSection(
                     OutlinedButton(
                         onClick = {
                             viewModel.exportAndShareMp4(
+                                uiContext = uiContext,
                                 chooserTitle = strings.saveMp4GalleryBtn,
                                 shareDirectlyToWhatsApp = false,
                                 galleryMsg = strings.savedToGalleryMsg
@@ -1048,7 +1109,7 @@ private fun CreateAndExportSection(
 
                 OutlinedButton(
                     onClick = {
-                        viewModel.shareRawPair(strings.exportRawBtn, strings.exportedFilesMsg)
+                        viewModel.shareRawPair(uiContext, strings.exportRawBtn, strings.exportedFilesMsg)
                     },
                     modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("export_raw_button")
                 ) {

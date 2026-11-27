@@ -92,5 +92,15 @@ class StickerProviderRobolectricTest {
         assertEquals("com.whatsapp.intent.action.ENABLE_STICKER_PACK", intent.action)
         assertEquals(pack.packId, intent.getStringExtra("sticker_pack_id"))
         assertEquals(StickerContentProvider.AUTHORITY, intent.getStringExtra("sticker_pack_authority"))
+
+        // Verify calling bridge with Application context never throws AndroidRuntimeException
+        val tempMp4 = java.io.File(context.cacheDir, "exports/test_share.mp4").apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(0, 0, 0, 24))
+        }
+        val shareResult = WhatsAppBridge.shareMp4ToWhatsApp(context, tempMp4, "Share")
+        assertTrue(shareResult.isSuccess)
+        val addResult = WhatsAppBridge.launchAddPackToWhatsApp(context, pack.packId, pack.name)
+        assertTrue(addResult.isFailure) // WhatsApp not installed in Robolectric, must return clean Result.failure without crashing
     }
 }

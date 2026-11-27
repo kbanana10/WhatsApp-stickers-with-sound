@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
@@ -14,13 +15,15 @@ import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.StickerPackRepository
 import com.example.engine.AnalysisResult
 import com.example.engine.AudioProcessor
+import com.example.engine.CompressionMode
 import com.example.engine.FramingMode
 import com.example.engine.GeneratedSticker
 import com.example.engine.MediaEngine
 import com.example.engine.MixFitMode
 import com.example.engine.Mp4StickerExporter
+import com.example.engine.SizeCapMode
 import com.example.engine.SourceKind
-import com.example.engine.WebpMuxer
+import com.example.engine.StickerLimits
 import com.example.whatsapp.WhatsAppBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -79,11 +82,13 @@ data class StudioUiState(
     // Mix & format options
     val mixFitMode: MixFitMode = MixFitMode.INDEPENDENT,
     val framingMode: FramingMode = FramingMode.CONTAIN,
+    val sizeCapMode: SizeCapMode = SizeCapMode.MAX_QUALITY_1MB,
+    val compressionMode: CompressionMode = CompressionMode.AUTO,
     val analysis: AnalysisResult? = null,
     val analysisKey: String? = null,
     val selectedSide: Int? = null,
     val selectedFps: Int? = null,
-    val showMatrix: Boolean = false,
+    val showMatrix: Boolean = true,
     val syncOffsetMs: Int = 0,
     val stillExperimental: Boolean = false,
 
@@ -133,11 +138,11 @@ data class StudioUiState(
         val vPart = "${mode.name}|$visualUri|${"%.2f".format(visualStartSec)}|${"%.2f".format(visualClipLen)}|$isGif"
         val followsAudio = mode == StudioMode.IMAGE || mixFitMode != MixFitMode.INDEPENDENT
         val aPart = if (followsAudio) "${mixFitMode.name}|${"%.2f".format(effectiveAudioLen)}" else ""
-        return "$vPart|$aPart|${framingMode.name}"
+        return "$vPart|$aPart|${framingMode.name}|${sizeCapMode.name}"
     }
 
     fun computeFullKey(): String {
-        return "${computeAnalysisKey()}|$effectiveAudioUri|${"%.2f".format(effectiveAudioStart)}|${"%.2f".format(effectiveAudioLen)}|$selectedSide|$selectedFps|$syncOffsetMs|$stillExperimental"
+        return "${computeAnalysisKey()}|$effectiveAudioUri|${"%.2f".format(effectiveAudioStart)}|${"%.2f".format(effectiveAudioLen)}|$selectedSide|$selectedFps|${compressionMode.name}|$syncOffsetMs|$stillExperimental"
     }
 }
 
@@ -156,6 +161,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val packs = packRepo.packsWithStickers
 
     private var activeJob: Job? = null
+    private var autoAnalyzeJob: Job? = null
     private var scrubJob: Job? = null
     private var playTickerJob: Job? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -245,6 +251,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 audioPeakMax = aProbe?.peakMax ?: 0f
                             )
                         }
+                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                     StudioMode.IMAGE -> {
                         val imgProbe = MediaEngine.probeImage(appContext, uri)
@@ -261,6 +268,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 visualPreviewBitmap = preview
                             )
                         }
+                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                     StudioMode.MIX -> {
                         val mime = appContext.contentResolver.getType(uri).orEmpty()
@@ -307,6 +315,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                             }
                         }
+                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                 }
             }.onFailure { err ->
@@ -344,6 +353,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         audioCursorSec = 0.0
                     )
                 }
+                scheduleAutoAnalysis(delayMs = 100L)
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(isProbingAudio = false, errorMessage = err.message ?: "Failed to decode audio")
@@ -360,6 +370,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val c = cursorSec.coerceIn(0.0, dur)
         _uiState.update { it.copy(visualStartSec = s, visualEndSec = e, visualCursorSec = c) }
         scheduleFrameScrub(c)
+        scheduleAutoAnalysis(delayMs = 450L)
     }
 
     fun updateVisualCursor(cursorSec: Double) {
@@ -377,6 +388,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val e = endSec.coerceIn((s + 0.3).coerceAtMost(dur), dur)
         val c = cursorSec.coerceIn(0.0, dur)
         _uiState.update { it.copy(audioStartSec = s, audioEndSec = e, audioCursorSec = c) }
+        scheduleAutoAnalysis(delayMs = 450L)
     }
 
     fun updateAudioCursor(cursorSec: Double) {
@@ -387,10 +399,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setMixFitMode(mode: MixFitMode) {
         _uiState.update { it.copy(mixFitMode = mode) }
+        scheduleAutoAnalysis(delayMs = 200L)
     }
 
     fun setFramingMode(mode: FramingMode) {
         _uiState.update { it.copy(framingMode = mode) }
+        scheduleAutoAnalysis(delayMs = 200L)
+    }
+
+    fun setSizeCapMode(mode: SizeCapMode) {
+        _uiState.update { it.copy(sizeCapMode = mode) }
+        scheduleAutoAnalysis(delayMs = 100L)
+    }
+
+    fun setCompressionMode(mode: CompressionMode) {
+        _uiState.update { it.copy(compressionMode = mode) }
     }
 
     fun toggleMatrixVisible() {
@@ -399,6 +422,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectGridCell(side: Int, fps: Int) {
         _uiState.update { it.copy(selectedSide = side, selectedFps = fps) }
+    }
+
+    private fun scheduleAutoAnalysis(delayMs: Long) {
+        autoAnalyzeJob?.cancel()
+        autoAnalyzeJob = viewModelScope.launch {
+            delay(delayMs)
+            val st = _uiState.value
+            if (st.sourcesReady && !st.isCreating && !st.isExportingMp4 && !st.isAnalysisFresh) {
+                runAnalysis()
+            }
+        }
     }
 
     fun setSyncOffsetMs(ms: Int) {
@@ -528,6 +562,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     audioDurationSec = st.effectiveAudioLen,
                     framingMode = st.framingMode,
                     fitMode = st.mixFitMode,
+                    sizeCapMode = st.sizeCapMode,
                     onProgress = { p -> _uiState.update { it.copy(analyzeProgress = p) } }
                 )
                 _uiState.update {
@@ -558,6 +593,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val aUri = st.effectiveAudioUri ?: return
         if (!st.sourcesReady || st.isAnalyzing || st.isCreating) return
         stopPlayback()
+        autoAnalyzeJob?.cancel()
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
             _uiState.update {
@@ -569,7 +605,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             runCatching {
-                // Auto-run fast multi-core analysis if not yet computed or stale
                 val currentAnalysis: AnalysisResult
                 val side: Int
                 val fps: Int
@@ -593,9 +628,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         audioDurationSec = st.effectiveAudioLen,
                         framingMode = st.framingMode,
                         fitMode = st.mixFitMode,
+                        sizeCapMode = st.sizeCapMode,
                         onProgress = { p -> _uiState.update { it.copy(createProgress = p * 0.45f) } }
                     )
-                    val rec = analyzed.recommended ?: error("No option fits under 1 MB. Shorten clip.")
+                    val rec = analyzed.recommended ?: error("No option fits under limit. Shorten clip.")
                     currentAnalysis = analyzed
                     side = rec.side
                     fps = rec.fps
@@ -621,6 +657,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     stillExperimental = st.stillExperimental,
                     packName = st.packName,
                     publisher = st.publisher,
+                    compressionMode = st.compressionMode,
+                    sizeCapMode = st.sizeCapMode,
                     onProgress = { p -> _uiState.update { it.copy(createProgress = 0.45f + p * 0.55f) } }
                 )
 
@@ -663,26 +701,27 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val generated = st.generatedSticker ?: return
         viewModelScope.launch {
             runCatching {
-                val updatedWebp = if (pack.name != generated.packName || pack.publisher != generated.publisher) {
-                    WebpMuxer.retagWebp(generated.webpBytes, pack.name, pack.publisher, generated.soundSha256)
-                } else {
-                    generated.webpBytes
-                }
+                val packReadyWebp = MediaEngine.buildWhatsAppPackWebp(
+                    analysis = st.analysis,
+                    generated = generated,
+                    packName = pack.name,
+                    publisher = pack.publisher
+                )
                 val ogg = generated.oggBytes ?: ByteArray(0)
                 val thumb = generated.previewFrames.firstOrNull()
                 packRepo.saveGeneratedStickerToPack(
                     packId = pack.packId,
-                    webpBytes = updatedWebp,
+                    webpBytes = packReadyWebp,
                     oggBytes = ogg,
                     mp4File = generated.mp4File,
                     thumbnailBitmap = thumb,
                     sourceKind = st.mode.name,
                     soundSha256 = generated.soundSha256,
-                    durationMs = (generated.durationSec * 1000).toLong(),
+                    durationMs = (generated.durationSec * 1000).toLong().coerceAtMost(9_800L),
                     audioDurationMs = (generated.audioDurationSec * 1000).toLong(),
-                    side = generated.side,
+                    side = StickerLimits.SIDE,
                     fps = generated.fps,
-                    isAnimated = generated.isAnimated
+                    isAnimated = true
                 )
             }.onSuccess {
                 _uiState.update { it.copy(statusBanner = successMessage) }
@@ -703,7 +742,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun exportAndShareMp4(chooserTitle: String, shareDirectlyToWhatsApp: Boolean, galleryMsg: String) {
+    fun exportAndShareMp4(
+        uiContext: Context,
+        chooserTitle: String,
+        shareDirectlyToWhatsApp: Boolean,
+        galleryMsg: String
+    ) {
         val st = _uiState.value
         val generated = st.generatedSticker ?: return
         val analysis = st.analysis ?: return
@@ -726,8 +770,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         outFile = out,
                         frames = analysis.frames,
                         captureFps = analysis.captureFps,
-                        targetSide = max(generated.side, 256),
-                        targetFps = max(generated.fps, 15),
+                        targetSide = max(generated.side, StickerLimits.SIDE),
+                        targetFps = max(generated.fps, 20),
                         durationSec = max(generated.durationSec, generated.audioDurationSec),
                         pcm48kMono = pcm
                     )
@@ -739,7 +783,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 if (shareDirectlyToWhatsApp) {
-                    WhatsAppBridge.shareMp4ToWhatsApp(appContext, mp4File, chooserTitle)
+                    WhatsAppBridge.shareMp4ToWhatsApp(uiContext, mp4File, chooserTitle)
                         .onFailure { err -> _uiState.update { it.copy(errorMessage = err.message) } }
                 } else {
                     WhatsAppBridge.saveMp4ToGallery(
@@ -760,7 +804,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun shareRawPair(chooserTitle: String, doneMsg: String) {
+    fun shareRawPair(uiContext: Context, chooserTitle: String, doneMsg: String) {
         val generated = _uiState.value.generatedSticker ?: return
         viewModelScope.launch {
             runCatching {
@@ -771,7 +815,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 val oggFile = File(exportDir, "sticker_${System.currentTimeMillis()}.ogg").apply {
                     writeBytes(generated.oggBytes ?: ByteArray(0))
                 }
-                WhatsAppBridge.shareRawPair(appContext, webpFile, oggFile, chooserTitle)
+                WhatsAppBridge.shareRawPair(uiContext, webpFile, oggFile, chooserTitle)
                     .getOrThrow()
                 _uiState.update { it.copy(statusBanner = doneMsg) }
             }.onFailure { err ->
