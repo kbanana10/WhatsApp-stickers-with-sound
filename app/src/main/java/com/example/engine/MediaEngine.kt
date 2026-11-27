@@ -306,6 +306,58 @@ object MediaEngine {
             sampleBytes[side] = map
         }
 
+        val (cells, recommended) = buildGridAndRecommendation(
+            sampleBytes = sampleBytes,
+            distinctCounts = distinctCounts,
+            sizeCapMode = sizeCapMode
+        )
+
+        onProgress(1f)
+        AnalysisResult(
+            sourceKind = sourceKind,
+            framingMode = framingMode,
+            fitMode = fitMode,
+            sizeCapMode = sizeCapMode,
+            durationSec = stickerDur,
+            visualDurationSec = vDur,
+            audioDurationSec = audioDurationSec,
+            frames = frames,
+            captureFps = captureFps,
+            captureSide = captureSide,
+            distinctCounts = distinctCounts,
+            sampleBytes = sampleBytes,
+            cells = cells,
+            recommended = recommended,
+            elapsedMs = System.currentTimeMillis() - t0
+        )
+    }
+
+    /**
+     * Recomputes grid cell statuses and recommended target for a new [SizeCapMode]
+     * in-memory without re-decoding or re-sampling any video frames.
+     */
+    fun recomputeSizeCap(existing: AnalysisResult, newMode: SizeCapMode): AnalysisResult {
+        if (existing.sourceKind == SourceKind.IMAGE) {
+            return existing.copy(sizeCapMode = newMode)
+        }
+        val (cells, recommended) = buildGridAndRecommendation(
+            sampleBytes = existing.sampleBytes,
+            distinctCounts = existing.distinctCounts,
+            sizeCapMode = newMode
+        )
+        return existing.copy(
+            sizeCapMode = newMode,
+            cells = cells,
+            recommended = recommended,
+            elapsedMs = 0L
+        )
+    }
+
+    private fun buildGridAndRecommendation(
+        sampleBytes: Map<Int, Map<Float, Double>>,
+        distinctCounts: Map<Int, Int>,
+        sizeCapMode: SizeCapMode
+    ): Pair<List<GridCell>, GridCell?> {
         val overhead = 32
         val cells = mutableListOf<GridCell>()
         for (side in StickerLimits.SIDES) {
@@ -337,28 +389,9 @@ object MediaEngine {
                 )
             }
         }
-
         val recommended = cells.filter { it.status == CellStatus.OK }.maxByOrNull { it.score }
             ?: cells.filter { it.status == CellStatus.LOW_QUALITY }.maxByOrNull { it.score }
-
-        onProgress(1f)
-        AnalysisResult(
-            sourceKind = sourceKind,
-            framingMode = framingMode,
-            fitMode = fitMode,
-            sizeCapMode = sizeCapMode,
-            durationSec = stickerDur,
-            visualDurationSec = vDur,
-            audioDurationSec = audioDurationSec,
-            frames = frames,
-            captureFps = captureFps,
-            captureSide = captureSide,
-            distinctCounts = distinctCounts,
-            sampleBytes = sampleBytes,
-            cells = cells,
-            recommended = recommended,
-            elapsedMs = System.currentTimeMillis() - t0
-        )
+        return cells to recommended
     }
 
     /**
@@ -444,10 +477,11 @@ object MediaEngine {
             }
 
             val cell = analysis.cells.firstOrNull { it.side == side && it.fps == fps }
-            val previewBitmaps = analysis.frames
-                .filterIndexed { idx, _ -> idx % max(1, analysis.frames.size / 24) == 0 }
-                .take(24)
-                .map { it.bitmap }
+            val previewCount = min(24, analysis.frames.size).coerceAtLeast(1)
+            val previewBitmaps = List(previewCount) { i ->
+                val idx = (i * analysis.frames.size) / previewCount
+                analysis.frames[idx].bitmap
+            }
 
             val waveform = computeWaveform64(pcm)
             onProgress(1f)
@@ -610,7 +644,15 @@ object MediaEngine {
         return if (isStill) {
             WebpMuxer.buildStillWebp(assembled.first(), exif, side)
         } else {
-            WebpMuxer.buildAnimatedWebp(assembled, exif, side)
+            val animFrames = if (assembled.size == 1) {
+                val single = assembled.first()
+                val firstDur = (single.durationMs / 2).coerceAtLeast(1)
+                val secondDur = (single.durationMs - firstDur).coerceAtLeast(1)
+                listOf(single.copy(durationMs = firstDur), single.copy(durationMs = secondDur))
+            } else {
+                assembled
+            }
+            WebpMuxer.buildAnimatedWebp(animFrames, exif, side)
         }
     }
 
@@ -636,9 +678,12 @@ object MediaEngine {
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(context, uri)
-                    val durMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        ?.toLongOrNull() ?: ((startSec + capDurSec) * 1000).toLong()
-                    val maxTimeUs = ((durMs - 20).coerceAtLeast(0)) * 1000L
+                    val rawDurMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.takeIf { it > 0L }
+                    val fallbackDurMs = ((startSec + capDurSec) * 1000.0).roundToInt().toLong().coerceAtLeast(1000L)
+                    val durMs = rawDurMs ?: fallbackDurMs
+                    val maxTimeUs = ((durMs - 20L).coerceAtLeast(50L)) * 1000L
 
                     for (i in workerId until totalFrames step workerCount) {
                         coroutineContext.ensureActive()
@@ -667,8 +712,48 @@ object MediaEngine {
         workers.awaitAll()
 
         // Fill any rare null slot from nearest valid frame
-        val valid = slots.filterNotNull()
+        var valid = slots.filterNotNull()
         require(valid.isNotEmpty()) { "Could not decode any video frames" }
+
+        // Fallback if OPTION_CLOSEST returned identical frames across the whole clip
+        if (totalFrames >= 2 && capDurSec >= 0.3) {
+            val firstFp = valid.first().fingerprint
+            val allIdentical = valid.all { it.fingerprint.contentEquals(firstFp) }
+            if (allIdentical) {
+                val syncRetriever = MediaMetadataRetriever()
+                try {
+                    syncRetriever.setDataSource(context, uri)
+                    val rawDurMs = syncRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()
+                        ?.takeIf { it > 0L }
+                    val fallbackDurMs = ((startSec + capDurSec) * 1000.0).roundToInt().toLong().coerceAtLeast(1000L)
+                    val durMs = rawDurMs ?: fallbackDurMs
+                    val maxTimeUs = ((durMs - 20L).coerceAtLeast(50L)) * 1000L
+                    val syncSlots = arrayOfNulls<CapturedFrame>(totalFrames)
+                    for (i in 0 until totalFrames) {
+                        coroutineContext.ensureActive()
+                        val targetUs = (((startSec + (i + 0.5) / fps) * 1_000_000.0).toLong())
+                            .coerceIn(0L, maxTimeUs)
+                        val raw = syncRetriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        if (raw != null) {
+                            val square = drawToSquareBitmap(raw, side, framing)
+                            raw.recycle()
+                            syncSlots[i] = CapturedFrame(square, computeFingerprint(square))
+                        }
+                    }
+                    val syncValid = syncSlots.filterNotNull()
+                    if (syncValid.any { !it.fingerprint.contentEquals(syncValid.first().fingerprint) }) {
+                        for (i in 0 until totalFrames) {
+                            slots[i] = syncSlots[i]
+                        }
+                        valid = syncValid
+                    }
+                } finally {
+                    runCatching { syncRetriever.release() }
+                }
+            }
+        }
+
         var lastValid = valid.first()
         List(totalFrames) { idx ->
             val current = slots[idx]
@@ -766,8 +851,8 @@ object MediaEngine {
             val g = (c shr 8) and 0xFF
             val b = c and 0xFF
             val a = (c ushr 24) and 0xFF
-            val lum = ((r * 30 + g * 59 + b * 11) / 100) and 0xF0
-            fp[i] = (lum or (a ushr 4)).toByte()
+            val lum = ((r * 30 + g * 59 + b * 11) / 100) and 0xF8
+            fp[i] = (lum or (a ushr 5)).toByte()
         }
         return fp
     }

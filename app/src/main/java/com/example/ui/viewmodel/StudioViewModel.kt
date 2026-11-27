@@ -165,7 +165,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val packs = packRepo.packsWithStickers
 
     private var activeJob: Job? = null
-    private var autoAnalyzeJob: Job? = null
     private var scrubJob: Job? = null
     private var playTickerJob: Job? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -196,6 +195,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     fun selectMode(mode: StudioMode) {
         if (_uiState.value.isAnalyzing || _uiState.value.isCreating) return
         stopPlayback()
+        scrubJob?.cancel()
         _uiState.update {
             it.copy(
                 mode = mode,
@@ -225,6 +225,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onVisualPicked(uri: Uri) {
         stopPlayback()
+        scrubJob?.cancel()
         val mode = _uiState.value.mode
         val fileName = resolveFileName(uri)
         _uiState.update {
@@ -233,7 +234,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 errorMessage = null,
                 statusBanner = null,
                 analysis = null,
-                generatedSticker = null
+                analysisKey = null,
+                selectedSide = null,
+                selectedFps = null,
+                generatedSticker = null,
+                generatedKey = null
             )
         }
 
@@ -265,7 +270,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 audioPeakMax = aProbe?.peakMax ?: 0f
                             )
                         }
-                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                     StudioMode.IMAGE -> {
                         val imgProbe = MediaEngine.probeImage(appContext, uri)
@@ -282,7 +286,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 visualPreviewBitmap = preview
                             )
                         }
-                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                     StudioMode.MIX -> {
                         val mime = appContext.contentResolver.getType(uri).orEmpty()
@@ -329,7 +332,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                             }
                         }
-                        scheduleAutoAnalysis(delayMs = 100L)
                     }
                 }
             }.onFailure { err ->
@@ -367,7 +369,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         audioCursorSec = 0.0
                     )
                 }
-                scheduleAutoAnalysis(delayMs = 100L)
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(isProbingAudio = false, errorMessage = err.message ?: "Failed to decode audio")
@@ -384,7 +385,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val c = cursorSec.coerceIn(0.0, dur)
         _uiState.update { it.copy(visualStartSec = s, visualEndSec = e, visualCursorSec = c) }
         scheduleFrameScrub(c)
-        scheduleAutoAnalysis(delayMs = 450L)
     }
 
     fun updateVisualCursor(cursorSec: Double) {
@@ -402,7 +402,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val e = endSec.coerceIn((s + 0.3).coerceAtMost(dur), dur)
         val c = cursorSec.coerceIn(0.0, dur)
         _uiState.update { it.copy(audioStartSec = s, audioEndSec = e, audioCursorSec = c) }
-        scheduleAutoAnalysis(delayMs = 450L)
     }
 
     fun updateAudioCursor(cursorSec: Double) {
@@ -413,17 +412,32 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setMixFitMode(mode: MixFitMode) {
         _uiState.update { it.copy(mixFitMode = mode) }
-        scheduleAutoAnalysis(delayMs = 200L)
     }
 
     fun setFramingMode(mode: FramingMode) {
         _uiState.update { it.copy(framingMode = mode) }
-        scheduleAutoAnalysis(delayMs = 200L)
     }
 
     fun setSizeCapMode(mode: SizeCapMode) {
-        _uiState.update { it.copy(sizeCapMode = mode) }
-        scheduleAutoAnalysis(delayMs = 100L)
+        val st = _uiState.value
+        val existing = st.analysis
+        if (existing != null) {
+            val wasFresh = st.isAnalysisFresh
+            val recomputed = MediaEngine.recomputeSizeCap(existing, mode)
+            _uiState.update { cur ->
+                val updated = cur.copy(
+                    sizeCapMode = mode,
+                    analysis = recomputed,
+                    selectedSide = recomputed.recommended?.side,
+                    selectedFps = recomputed.recommended?.fps
+                )
+                updated.copy(
+                    analysisKey = if (wasFresh) updated.computeAnalysisKey() else cur.analysisKey
+                )
+            }
+        } else {
+            _uiState.update { it.copy(sizeCapMode = mode) }
+        }
     }
 
     fun setCompressionMode(mode: CompressionMode) {
@@ -436,17 +450,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectGridCell(side: Int, fps: Int) {
         _uiState.update { it.copy(selectedSide = side, selectedFps = fps) }
-    }
-
-    private fun scheduleAutoAnalysis(delayMs: Long) {
-        autoAnalyzeJob?.cancel()
-        autoAnalyzeJob = viewModelScope.launch {
-            delay(delayMs)
-            val st = _uiState.value
-            if (st.sourcesReady && !st.isCreating && !st.isExportingMp4 && !st.isAnalysisFresh) {
-                runAnalysis()
-            }
-        }
     }
 
     fun setSyncOffsetMs(ms: Int) {
@@ -607,7 +610,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val aUri = st.effectiveAudioUri ?: return
         if (!st.sourcesReady || st.isAnalyzing || st.isCreating) return
         stopPlayback()
-        autoAnalyzeJob?.cancel()
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
             _uiState.update {
