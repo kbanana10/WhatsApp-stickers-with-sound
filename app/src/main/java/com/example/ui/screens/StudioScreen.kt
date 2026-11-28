@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
@@ -88,7 +89,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.engine.CellStatus
 import com.example.engine.CompressionMode
 import com.example.engine.FramingMode
@@ -108,11 +111,14 @@ import com.example.ui.theme.MonoFontFamily
 import com.example.ui.viewmodel.StudioMode
 import com.example.ui.viewmodel.StudioUiState
 import com.example.ui.viewmodel.StudioViewModel
+import com.example.whatsapp.WebSendBridge
+import java.io.File
 
 @Composable
 fun StudioScreen(
     viewModel: StudioViewModel,
     strings: Strings,
+    onOpenWeb: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -231,7 +237,8 @@ fun StudioScreen(
                     strings = strings,
                     isBusy = isBusy,
                     viewModel = viewModel,
-                    onOpenSaveDialog = { showSaveDialog = true }
+                    onOpenSaveDialog = { showSaveDialog = true },
+                    onOpenWeb = onOpenWeb
                 )
             }
 
@@ -921,7 +928,8 @@ private fun CreateAndExportSection(
     strings: Strings,
     isBusy: Boolean,
     viewModel: StudioViewModel,
-    onOpenSaveDialog: () -> Unit
+    onOpenSaveDialog: () -> Unit,
+    onOpenWeb: () -> Unit
 ) {
     val uiContext = LocalContext.current
     Row(
@@ -1136,6 +1144,26 @@ private fun CreateAndExportSection(
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(strings.exportRawBtn)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val res = state.generatedSticker ?: return@OutlinedButton
+                        val dir = File(uiContext.cacheDir, "web_send").apply { mkdirs() }
+                        val f = File(dir, "sticker_${System.currentTimeMillis()}.webp")
+                        f.writeBytes(res.webpBytes)
+                        WebSendBridge.pendingStickerUri = FileProvider.getUriForFile(
+                            uiContext,
+                            "${BuildConfig.APPLICATION_ID}.fileprovider",
+                            f
+                        )
+                        onOpenWeb()
+                    },
+                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("send_via_web_button")
+                ) {
+                    Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(strings.sendViaWebBtn)
                 }
 
                 Surface(

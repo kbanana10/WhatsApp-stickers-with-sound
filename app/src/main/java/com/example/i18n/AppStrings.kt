@@ -115,6 +115,7 @@ data class Strings(
     val shareMp4WaBtn: String,
     val saveMp4GalleryBtn: String,
     val exportRawBtn: String,
+    val sendViaWebBtn: String,
     val waAudioTip: String,
 
     // Packs Library
@@ -240,6 +241,7 @@ object AppStrings {
         shareMp4WaBtn = "مشاركة مباشرة (يرسل فيديو وليس ملصقاً)",
         saveMp4GalleryBtn = "حفظ MP4 بالمعرض",
         exportRawBtn = "مشاركة .webp و .ogg",
+        sendViaWebBtn = "أرسل لنفسي عبر واتساب ويب",
         waAudioTip = "احفظ الفيديو بالمعرض، ثم من واتساب: لوحة الملصقات ← إنشاء ملصق ← اختر الفيديو ← أضف الصوت. هذا يصنع ملصقاً صوتياً رسمياً بدون حظر.",
 
         packsTitle = "مكتبة الحزم",
@@ -363,6 +365,7 @@ object AppStrings {
         shareMp4WaBtn = "Direct Share (sends video, not sticker)",
         saveMp4GalleryBtn = "Save MP4 to Gallery",
         exportRawBtn = "Share .webp & .ogg",
+        sendViaWebBtn = "Send to Self via WhatsApp Web",
         waAudioTip = "Save the video to your Gallery, then in WhatsApp open Stickers → Create → pick the video → enable sound. This creates an official audio sticker without ban risk.",
 
         packsTitle = "Sticker Packs",

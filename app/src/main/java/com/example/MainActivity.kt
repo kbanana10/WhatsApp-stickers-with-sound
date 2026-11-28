@@ -343,7 +343,17 @@ fun AudioStickersApp(
                     modifier = Modifier.weight(1f).fillMaxSize()
                 ) {
                     composable(Routes.STUDIO) {
-                        StudioScreen(viewModel = studioViewModel, strings = strings)
+                        StudioScreen(
+                            viewModel = studioViewModel,
+                            strings = strings,
+                            onOpenWeb = {
+                                navController.navigate(Routes.WEB) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
                     }
                     composable(Routes.PACKS) {
                         PacksScreen(
