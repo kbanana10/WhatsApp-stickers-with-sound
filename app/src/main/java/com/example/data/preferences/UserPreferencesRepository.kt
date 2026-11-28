@@ -3,7 +3,6 @@ package com.example.data.preferences
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -20,8 +19,7 @@ data class UserPreferences(
     val themeMode: ThemeMode = ThemeMode.AUTO,
     val defaultPackName: String = "",
     val defaultPublisher: String = "",
-    val syncOffsetMs: Int = 0,
-    val rootSafetyNoticeAccepted: Boolean = false
+    val syncOffsetMs: Int = 0
 )
 
 class UserPreferencesRepository(private val context: Context) {
@@ -32,7 +30,6 @@ class UserPreferencesRepository(private val context: Context) {
         val PACK_NAME = stringPreferencesKey("default_pack_name")
         val PUBLISHER = stringPreferencesKey("default_publisher")
         val SYNC_OFFSET_MS = intPreferencesKey("sync_offset_ms")
-        val ROOT_SAFETY_NOTICE_ACCEPTED = booleanPreferencesKey("root_safety_notice_accepted")
     }
 
     val preferences: Flow<UserPreferences> = context.dataStore.data.map { prefs ->
@@ -45,8 +42,7 @@ class UserPreferencesRepository(private val context: Context) {
             } ?: ThemeMode.AUTO,
             defaultPackName = prefs[Keys.PACK_NAME] ?: "",
             defaultPublisher = prefs[Keys.PUBLISHER] ?: "",
-            syncOffsetMs = prefs[Keys.SYNC_OFFSET_MS] ?: 0,
-            rootSafetyNoticeAccepted = prefs[Keys.ROOT_SAFETY_NOTICE_ACCEPTED] ?: false
+            syncOffsetMs = prefs[Keys.SYNC_OFFSET_MS] ?: 0
         )
     }
 
@@ -67,9 +63,5 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setSyncOffsetMs(ms: Int) {
         context.dataStore.edit { it[Keys.SYNC_OFFSET_MS] = ms.coerceIn(0, 1000) }
-    }
-
-    suspend fun setRootSafetyNoticeAccepted(accepted: Boolean) {
-        context.dataStore.edit { it[Keys.ROOT_SAFETY_NOTICE_ACCEPTED] = accepted }
     }
 }

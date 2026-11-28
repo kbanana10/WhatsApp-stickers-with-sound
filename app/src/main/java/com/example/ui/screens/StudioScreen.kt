@@ -98,7 +98,6 @@ import com.example.engine.SizeCapMode
 import com.example.i18n.Strings
 import com.example.ui.components.QualityMatrixGrid
 import com.example.ui.components.QualityPresetRow
-import com.example.ui.components.RootSafetyNoticeDialog
 import com.example.ui.components.SaveToPackDialog
 import com.example.ui.components.StickerPreviewBox
 import com.example.ui.components.TimelineTrimmer
@@ -118,7 +117,6 @@ fun StudioScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val packs by viewModel.packs.collectAsStateWithLifecycle(initialValue = emptyList())
     var showSaveDialog by remember { mutableStateOf(false) }
-    var showRootSafetyDialog by remember { mutableStateOf(false) }
     var showAdvanced by remember { mutableStateOf(false) }
 
     val videoPicker = rememberLauncherForActivityResult(
@@ -232,17 +230,7 @@ fun StudioScreen(
                     strings = strings,
                     isBusy = isBusy,
                     viewModel = viewModel,
-                    onOpenSaveDialog = { showSaveDialog = true },
-                    onRootInjectClick = {
-                        if (state.rootSafetyNoticeAccepted) {
-                            viewModel.injectGeneratedStickerWithRoot(
-                                successTemplate = strings.rootInjectSuccessSingle,
-                                missingOpusMsg = strings.rootMissingOpusError
-                            )
-                        } else {
-                            showRootSafetyDialog = true
-                        }
-                    }
+                    onOpenSaveDialog = { showSaveDialog = true }
                 )
             }
 
@@ -264,21 +252,6 @@ fun StudioScreen(
             onCreateNewPack = { name, pub ->
                 showSaveDialog = false
                 viewModel.createNewPackAndSave(name, pub, strings.savedToPackMsg)
-            }
-        )
-    }
-
-    if (showRootSafetyDialog) {
-        RootSafetyNoticeDialog(
-            strings = strings,
-            onDismiss = { showRootSafetyDialog = false },
-            onConfirm = {
-                showRootSafetyDialog = false
-                viewModel.acceptRootSafetyNotice()
-                viewModel.injectGeneratedStickerWithRoot(
-                    successTemplate = strings.rootInjectSuccessSingle,
-                    missingOpusMsg = strings.rootMissingOpusError
-                )
             }
         )
     }
@@ -931,8 +904,7 @@ private fun CreateAndExportSection(
     strings: Strings,
     isBusy: Boolean,
     viewModel: StudioViewModel,
-    onOpenSaveDialog: () -> Unit,
-    onRootInjectClick: () -> Unit
+    onOpenSaveDialog: () -> Unit
 ) {
     val uiContext = LocalContext.current
     Row(
@@ -1077,37 +1049,6 @@ private fun CreateAndExportSection(
                             Spacer(Modifier.width(6.dp))
                             Text(if (state.isPlayingStickerPreview) strings.stopPlay else strings.playTogetherBtn)
                         }
-                    }
-                }
-
-                // Root Direct Sound Sticker Injection (Magisk)
-                if (state.isRootAvailable && res.oggBytes != null) {
-                    Button(
-                        onClick = onRootInjectClick,
-                        enabled = !state.isInjectingRoot && !isBusy,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .minimumInteractiveComponentSize()
-                            .testTag("root_inject_sticker_button")
-                    ) {
-                        if (state.isInjectingRoot) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                        } else {
-                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (state.isInjectingRoot) strings.rootInjectingStatus
-                            else strings.rootInjectSingleBtn
-                        )
                     }
                 }
 

@@ -5,6 +5,9 @@ import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.repository.StickerPackRepository
+import com.example.engine.OggOpusMuxer
+import com.example.engine.StickerSafetyValidator
+import com.example.engine.WebpMuxer
 import com.example.whatsapp.StickerContentProvider
 import com.example.whatsapp.WhatsAppBridge
 import kotlinx.coroutines.Dispatchers
@@ -24,27 +27,49 @@ import org.robolectric.annotation.Config
 class StickerProviderRobolectricTest {
 
     @Test
-    fun contentProvider_servesPackMetadataAndStickersOnceThreeAdded() = runBlocking {
+    fun contentProvider_servesPackMetadataWebpAndOpusAudioOnceThreeAdded() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = AppDatabase.getInstance(context)
         val repo = StickerPackRepository(context, db.stickerDao())
         val pack = repo.createPack("Test Pack", "Tester")
 
+        val fakeVp8Payload = byteArrayOf(
+            'V'.code.toByte(), 'P'.code.toByte(), '8'.code.toByte(), ' '.code.toByte(),
+            4, 0, 0, 0,
+            1, 2, 3, 4
+        )
+
+        var lastOpusFileName = ""
         repeat(3) { idx ->
-            repo.saveGeneratedStickerToPack(
+            val opusBytes = OggOpusMuxer.buildOggOpus(
+                packets = listOf(byteArrayOf(0x01, 0x02, (idx + 1).toByte()), byteArrayOf(0x04, 0x05)),
+                preSkip = 312,
+                totalSamples48k = 1920
+            )
+            val sha = StickerSafetyValidator.computeOpusSha256Base64(opusBytes)
+            val frame = WebpMuxer.EncodedFrame(payload = fakeVp8Payload, hasAlpha = false, durationMs = 1000)
+            val webpBytes = WebpMuxer.buildAnimatedWebp(
+                frames = listOf(frame, frame),
+                exif = WebpMuxer.exifWhatsApp(pack.name, pack.publisher, sha),
+                side = 512
+            )
+            val saved = repo.saveGeneratedStickerToPack(
                 packId = pack.packId,
-                webpBytes = byteArrayOf(0x52, 0x49, 0x46, 0x46, idx.toByte()),
-                oggBytes = byteArrayOf(0x4F, 0x67, 0x67, 0x53),
+                webpBytes = webpBytes,
+                oggBytes = opusBytes,
                 mp4File = null,
                 thumbnailBitmap = null,
                 sourceKind = "VIDEO",
-                soundSha256 = "sha_$idx",
+                soundSha256 = sha,
                 durationMs = 2000L,
                 audioDurationMs = 2000L,
                 side = 512,
                 fps = 20,
                 isAnimated = true
             )
+            lastOpusFileName = saved.oggFileName
+            assertTrue(saved.fileName.endsWith(".webp"))
+            assertTrue(saved.oggFileName.endsWith(".opus"))
         }
 
         val controller = Robolectric.buildContentProvider(StickerContentProvider::class.java)
@@ -85,6 +110,12 @@ class StickerProviderRobolectricTest {
         val stickerAssetUri = Uri.parse("content://${StickerContentProvider.AUTHORITY}/stickers_asset/${pack.packId}/$firstStickerFileName")
         assertEquals("image/webp", provider.getType(stickerAssetUri))
         provider.openAssetFile(stickerAssetUri, "r").use { afd ->
+            assertNotNull(afd)
+        }
+
+        val opusAssetUri = Uri.parse("content://${StickerContentProvider.AUTHORITY}/stickers_asset/${pack.packId}/$lastOpusFileName")
+        assertEquals("audio/ogg; codecs=opus", provider.getType(opusAssetUri))
+        provider.openAssetFile(opusAssetUri, "r").use { afd ->
             assertNotNull(afd)
         }
 

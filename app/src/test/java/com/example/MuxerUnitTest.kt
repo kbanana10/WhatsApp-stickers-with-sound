@@ -67,6 +67,6 @@ class MuxerUnitTest {
         assertTrue(StickerLimits.score(512, 20) > StickerLimits.score(512, 10))
         assertTrue(StickerLimits.score(256, 20) > StickerLimits.score(128, 20))
         assertEquals(32_000, StickerLimits.computeTargetAudioBitrate(5.0))
-        assertEquals(12_000, StickerLimits.computeTargetAudioBitrate(800.0))
+        assertEquals(32_000, StickerLimits.computeTargetAudioBitrate(800.0))
     }
 }

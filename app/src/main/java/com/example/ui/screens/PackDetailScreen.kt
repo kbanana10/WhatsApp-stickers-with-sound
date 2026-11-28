@@ -23,7 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
@@ -31,7 +30,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,9 +41,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +53,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.local.StickerEntity
 import com.example.i18n.Strings
-import com.example.ui.components.RootSafetyNoticeDialog
 import com.example.ui.components.formatKb
 import com.example.ui.components.formatSec
 import com.example.ui.theme.MonoFontFamily
@@ -76,16 +70,7 @@ fun PackDetailScreen(
     val packWithStickers by viewModel.observePack(packId).collectAsStateWithLifecycle(initialValue = null)
     val playingId by viewModel.playingStickerId.collectAsStateWithLifecycle()
     val feedback by viewModel.feedbackMessage.collectAsStateWithLifecycle()
-    val isSuccessFeedback by viewModel.isSuccessFeedback.collectAsStateWithLifecycle()
-    val isRootAvailable by viewModel.isRootAvailable.collectAsStateWithLifecycle()
-    val isInjectingRoot by viewModel.isInjectingRoot.collectAsStateWithLifecycle()
-    val rootSafetyAccepted by viewModel.rootSafetyNoticeAccepted.collectAsStateWithLifecycle()
-    var pendingRootAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val context = LocalContext.current
-
-    fun runWithSafetyNotice(action: () -> Unit) {
-        if (rootSafetyAccepted) action() else pendingRootAction = action
-    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -115,57 +100,17 @@ fun PackDetailScreen(
         },
         bottomBar = {
             packWithStickers?.let { p ->
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    contentAlignment = Alignment.Center
                 ) {
-                    if (isRootAvailable) {
-                        Button(
-                            onClick = {
-                                runWithSafetyNotice {
-                                    viewModel.injectPackWithRoot(
-                                        packWithStickers = p,
-                                        successTemplate = strings.rootInjectSuccessPack,
-                                        noAudioPackMsg = strings.rootNoAudioPackError
-                                    )
-                                }
-                            },
-                            enabled = p.stickers.isNotEmpty() && !isInjectingRoot,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier
-                                .widthIn(max = 600.dp)
-                                .fillMaxWidth()
-                                .minimumInteractiveComponentSize()
-                                .testTag("detail_root_inject_pack_button")
-                        ) {
-                            if (isInjectingRoot) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            } else {
-                                Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
-                            }
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (isInjectingRoot) strings.rootInjectingStatus
-                                else strings.rootInjectPackBtn
-                            )
-                        }
-                    }
-
                     Button(
                         onClick = {
                             viewModel.addPackToWhatsApp(context, p.pack.packId, p.pack.name, strings.whatsappNotInstalled)
                         },
-                        enabled = p.stickers.size in 3..30 && !isInjectingRoot,
+                        enabled = p.stickers.size in 3..30,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.secondary,
                             contentColor = MaterialTheme.colorScheme.onSecondary
@@ -193,11 +138,7 @@ fun PackDetailScreen(
         ) {
             feedback?.let { msg ->
                 Surface(
-                    color = if (isSuccessFeedback) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
-                    },
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
                     shape = RoundedCornerShape(12.dp),
                     onClick = { viewModel.clearFeedback() },
                     modifier = Modifier
@@ -207,11 +148,7 @@ fun PackDetailScreen(
                 ) {
                     Text(
                         text = msg,
-                        color = if (isSuccessFeedback) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp)
                     )
@@ -228,23 +165,10 @@ fun PackDetailScreen(
                     StickerItemCard(
                         sticker = sticker,
                         isPlaying = playingId == sticker.id,
-                        showRootInject = isRootAvailable && sticker.oggBytes > 0 && !isInjectingRoot,
                         file = viewModel.repository.stickerFile(sticker.packId, sticker.fileName),
                         context = context,
                         strings = strings,
                         onPlayToggle = { viewModel.playStickerSound(sticker) },
-                        onRootInject = {
-                            runWithSafetyNotice {
-                                val packMeta = packWithStickers?.pack
-                                viewModel.injectStickerWithRoot(
-                                    sticker = sticker,
-                                    packName = packMeta?.name ?: "Audio Stickers",
-                                    publisher = packMeta?.publisher ?: "Audio Stickers",
-                                    successTemplate = strings.rootInjectSuccessSingle,
-                                    missingOpusMsg = strings.rootMissingOpusError
-                                )
-                            }
-                        },
                         onShare = { viewModel.shareStickerMp4OrRaw(context, sticker, strings.shareMp4WaBtn) },
                         onDelete = { viewModel.deleteSticker(sticker) }
                     )
@@ -252,30 +176,16 @@ fun PackDetailScreen(
             }
         }
     }
-
-    pendingRootAction?.let { action ->
-        RootSafetyNoticeDialog(
-            strings = strings,
-            onDismiss = { pendingRootAction = null },
-            onConfirm = {
-                pendingRootAction = null
-                viewModel.acceptRootSafetyNotice()
-                action()
-            }
-        )
-    }
 }
 
 @Composable
 private fun StickerItemCard(
     sticker: StickerEntity,
     isPlaying: Boolean,
-    showRootInject: Boolean,
     file: java.io.File,
     context: android.content.Context,
     strings: Strings,
     onPlayToggle: () -> Unit,
-    onRootInject: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -317,20 +227,6 @@ private fun StickerItemCard(
                         contentDescription = strings.playTogetherBtn,
                         tint = if (isPlaying) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                     )
-                }
-                if (showRootInject) {
-                    IconButton(
-                        onClick = onRootInject,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("sticker_root_inject_${sticker.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Bolt,
-                            contentDescription = strings.rootInjectSingleBtn,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
                 }
                 IconButton(onClick = onShare, modifier = Modifier.minimumInteractiveComponentSize()) {
                     Icon(Icons.Default.Share, contentDescription = strings.shareMp4WaBtn)

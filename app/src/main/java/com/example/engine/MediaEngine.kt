@@ -429,7 +429,7 @@ object MediaEngine {
                     fadeMs = fade
                 )
                 val ogg = OggOpusMuxer.encodePcm48kMonoToOgg(pcm, bitrate)
-                val sha = if (ogg != null) sha256Base64(ogg) else sha256Base64(pcm.size.toString().toByteArray())
+                val sha = if (ogg != null) StickerSafetyValidator.computeOpusSha256Base64(ogg) else sha256Base64(pcm.size.toString().toByteArray())
                 Triple(pcm, ogg, sha)
             }
 
@@ -517,17 +517,20 @@ object MediaEngine {
         packName: String,
         publisher: String
     ): ByteArray = withContext(Dispatchers.Default) {
+        val soundSha = generated.oggBytes?.takeIf { it.isNotEmpty() }
+            ?.let { StickerSafetyValidator.computeOpusSha256Base64(it) }
+            ?: generated.soundSha256
         val alreadyCompliant = generated.side == StickerLimits.SIDE &&
             generated.webpBytes.size <= StickerLimits.WA_PACK_SAFE_ANIMATED_BYTES &&
             generated.durationSec <= 10.0 &&
             generated.isAnimated
         if (alreadyCompliant) {
-            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, soundSha)
         }
 
-        val exif = WebpMuxer.exifWhatsApp(packName, publisher, generated.soundSha256)
+        val exif = WebpMuxer.exifWhatsApp(packName, publisher, soundSha)
         if (analysis == null || analysis.frames.isEmpty()) {
-            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+            return@withContext WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, soundSha)
         }
 
         val semaphore = Semaphore(cpuCores)
@@ -588,7 +591,7 @@ object MediaEngine {
                 }
             }
         }
-        smallestWebp ?: WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, generated.soundSha256)
+        smallestWebp ?: WebpMuxer.retagWebp(generated.webpBytes, packName, publisher, soundSha)
     }
 
     private suspend fun encodePlanToWebp(

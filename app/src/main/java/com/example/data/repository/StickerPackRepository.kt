@@ -10,6 +10,8 @@ import com.example.data.local.StickerDao
 import com.example.data.local.StickerEntity
 import com.example.data.local.StickerPackEntity
 import com.example.data.local.StickerPackWithStickers
+import com.example.engine.StickerSafetyValidator
+import com.example.engine.WebpMuxer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -65,14 +67,35 @@ class StickerPackRepository(
     ): StickerEntity = withContext(Dispatchers.IO) {
         val existingPack = dao.getPackByIdSync(packId)
             ?: error("Pack not found: $packId")
-        val dir = packDir(packId)
-        val stamp = System.currentTimeMillis()
-        val webpName = "stk_${stamp}.webp"
-        val oggName = "stk_${stamp}.ogg"
-        val mp4Name = if (mp4File != null && mp4File.exists()) "stk_${stamp}.mp4" else null
+        val effectiveDurationSec = maxOf(durationMs, audioDurationMs) / 1000.0
+        val effectiveSha = if (oggBytes.isNotEmpty()) {
+            StickerSafetyValidator.computeOpusSha256Base64(oggBytes)
+        } else {
+            soundSha256
+        }
+        val finalWebpBytes = if (webpBytes.size >= 12 &&
+            String(webpBytes, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+            String(webpBytes, 8, 4, Charsets.US_ASCII) == "WEBP"
+        ) {
+            WebpMuxer.retagWebp(
+                webpBytes = webpBytes,
+                packName = existingPack.pack.name,
+                publisher = existingPack.pack.publisher,
+                soundSha256 = effectiveSha.ifEmpty { null }
+            )
+        } else {
+            webpBytes
+        }
 
-        File(dir, webpName).writeBytes(webpBytes)
-        File(dir, oggName).writeBytes(oggBytes)
+        StickerSafetyValidator.validate(finalWebpBytes, oggBytes, effectiveDurationSec).getOrThrow()
+
+        val dir = packDir(packId)
+        val webpName = StickerSafetyValidator.computeWebpFileName(finalWebpBytes)
+        val opusName = StickerSafetyValidator.computeOpusFileName(oggBytes)
+        val mp4Name = if (mp4File != null && mp4File.exists()) "stk_${System.currentTimeMillis()}.mp4" else null
+
+        File(dir, webpName).writeBytes(finalWebpBytes)
+        File(dir, opusName).writeBytes(oggBytes)
         if (mp4Name != null && mp4File != null) {
             mp4File.copyTo(File(dir, mp4Name), overwrite = true)
         }
@@ -85,16 +108,16 @@ class StickerPackRepository(
         val entity = StickerEntity(
             packId = packId,
             fileName = webpName,
-            oggFileName = oggName,
+            oggFileName = opusName,
             mp4FileName = mp4Name,
             sourceKind = sourceKind,
-            soundSha256 = soundSha256,
+            soundSha256 = effectiveSha,
             durationMs = durationMs,
             audioDurationMs = audioDurationMs,
             side = side,
             fps = fps,
             isAnimated = isAnimated,
-            webpBytes = webpBytes.size.toLong(),
+            webpBytes = finalWebpBytes.size.toLong(),
             oggBytes = oggBytes.size.toLong()
         )
         val rowId = dao.insertSticker(entity)
@@ -110,11 +133,14 @@ class StickerPackRepository(
 
     suspend fun deleteSticker(sticker: StickerEntity) = withContext(Dispatchers.IO) {
         val dir = packDir(sticker.packId)
-        File(dir, sticker.fileName).delete()
-        File(dir, sticker.oggFileName).delete()
-        sticker.mp4FileName?.let { File(dir, it).delete() }
         dao.deleteSticker(sticker.id)
-        dao.getPackByIdSync(sticker.packId)?.let { packWithStickers ->
+        val remaining = dao.getPackByIdSync(sticker.packId)
+        val stillUsesWebp = remaining?.stickers?.any { it.fileName == sticker.fileName } == true
+        val stillUsesAudio = remaining?.stickers?.any { it.oggFileName == sticker.oggFileName } == true
+        if (!stillUsesWebp) File(dir, sticker.fileName).delete()
+        if (!stillUsesAudio) File(dir, sticker.oggFileName).delete()
+        sticker.mp4FileName?.let { File(dir, it).delete() }
+        remaining?.let { packWithStickers ->
             dao.updatePack(
                 packWithStickers.pack.copy(
                     imageDataVersion = packWithStickers.pack.imageDataVersion + 1

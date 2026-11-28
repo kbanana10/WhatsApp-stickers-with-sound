@@ -15,7 +15,8 @@ import java.io.File
 
 /**
  * Official WhatsApp Third-Party Sticker Pack ContentProvider.
- * Exposes local packs stored in Room + filesDir/stickers/ to WhatsApp & WhatsApp Business.
+ * Serves both WebP images and Opus audio files to WhatsApp via the official API.
+ * This is the ONLY ban-safe method to deliver stickers.
  */
 class StickerContentProvider : ContentProvider() {
 
@@ -28,25 +29,12 @@ class StickerContentProvider : ContentProvider() {
         private const val CODE_STICKER_ASSET = 4
 
         private val METADATA_COLUMNS = arrayOf(
-            "sticker_pack_identifier",
-            "sticker_pack_name",
-            "sticker_pack_publisher",
-            "sticker_pack_icon",
-            "android_play_store_link",
-            "ios_app_download_link",
-            "publisher_email",
-            "publisher_website",
-            "privacy_policy_website",
-            "license_agreement_website",
-            "image_data_version",
-            "avoid_cache",
-            "animated_sticker_pack"
+            "sticker_pack_identifier", "sticker_pack_name", "sticker_pack_publisher",
+            "sticker_pack_icon", "android_play_store_link", "ios_app_download_link",
+            "publisher_email", "publisher_website", "privacy_policy_website",
+            "license_agreement_website", "image_data_version", "avoid_cache", "animated_sticker_pack"
         )
-
-        private val STICKER_COLUMNS = arrayOf(
-            "sticker_file_name",
-            "sticker_emoji"
-        )
+        private val STICKER_COLUMNS = arrayOf("sticker_file_name", "sticker_emoji")
     }
 
     private val matcher = UriMatcher(UriMatcher.NO_MATCH).apply {
@@ -59,11 +47,8 @@ class StickerContentProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun query(
-        uri: Uri,
-        projection: Array<out String>?,
-        selection: String?,
-        selectionArgs: Array<out String>?,
-        sortOrder: String?
+        uri: Uri, projection: Array<out String>?, selection: String?,
+        selectionArgs: Array<out String>?, sortOrder: String?
     ): Cursor? {
         val ctx = context ?: return null
         val dao = AppDatabase.getInstance(ctx).stickerDao()
@@ -90,23 +75,11 @@ class StickerContentProvider : ContentProvider() {
         val cursor = MatrixCursor(METADATA_COLUMNS)
         for (item in packs) {
             val p = item.pack
-            cursor.addRow(
-                arrayOf<Any>(
-                    p.packId,
-                    p.name,
-                    p.publisher,
-                    p.trayIconFileName,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    p.imageDataVersion.toString(),
-                    0,
-                    if (p.animatedPack) 1 else 0
-                )
-            )
+            cursor.addRow(arrayOf<Any>(
+                p.packId, p.name, p.publisher, p.trayIconFileName,
+                "", "", "", "", "", "", p.imageDataVersion.toString(), 0,
+                if (p.animatedPack) 1 else 0
+            ))
         }
         cursor.setNotificationUri(context?.contentResolver, uri)
         return cursor
@@ -128,8 +101,11 @@ class StickerContentProvider : ContentProvider() {
         val packId = segments[1]
         val fileName = segments[2]
         val ctx = context ?: return null
+
+        // Both .webp and .opus files are stored in the same pack directory
         val packDir = File(ctx.filesDir, "stickers/$packId").canonicalFile
         val file = File(packDir, fileName).canonicalFile
+
         if (!file.path.startsWith(packDir.path + File.separator) || !file.exists()) return null
         val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         return AssetFileDescriptor(pfd, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
@@ -141,7 +117,11 @@ class StickerContentProvider : ContentProvider() {
         CODE_STICKERS -> "vnd.android.cursor.dir/vnd.$AUTHORITY.stickers"
         CODE_STICKER_ASSET -> {
             val name = uri.lastPathSegment.orEmpty()
-            if (name.endsWith(".png", ignoreCase = true)) "image/png" else "image/webp"
+            when {
+                name.endsWith(".opus", ignoreCase = true) -> "audio/ogg; codecs=opus"
+                name.endsWith(".png", ignoreCase = true) -> "image/png"
+                else -> "image/webp"
+            }
         }
         else -> null
     }

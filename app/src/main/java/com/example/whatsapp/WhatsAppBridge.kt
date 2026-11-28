@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 object WhatsAppBridge {
-
     private const val ACTION_ENABLE_STICKER_PACK = "com.whatsapp.intent.action.ENABLE_STICKER_PACK"
     private const val EXTRA_PACK_ID = "sticker_pack_id"
     private const val EXTRA_AUTHORITY = "sticker_pack_authority"
@@ -36,9 +35,7 @@ object WhatsAppBridge {
     private fun startIntentSafely(context: Context, intent: Intent): Result<Unit> {
         val activity = context.findActivity()
         val targetContext = activity ?: context
-        if (activity == null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        if (activity == null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
             targetContext.startActivity(intent)
             Result.success(Unit)
@@ -50,13 +47,9 @@ object WhatsAppBridge {
     private fun startChooserSafely(context: Context, innerIntent: Intent, title: String): Result<Unit> {
         val activity = context.findActivity()
         val targetContext = activity ?: context
-        if (activity == null) {
-            innerIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        if (activity == null) innerIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val chooser = Intent.createChooser(innerIntent, title).apply {
-            if (activity == null) {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            if (activity == null) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {
             targetContext.startActivity(chooser)
@@ -100,21 +93,14 @@ object WhatsAppBridge {
     fun launchAddPackToWhatsApp(context: Context, packId: String, packName: String): Result<Unit> {
         val waPkg = findInstalledWhatsAppPackage(context)
             ?: return Result.failure(ActivityNotFoundException("WhatsApp is not installed"))
-        val pinned = buildEnableStickerPackIntent(packId, packName).apply {
-            `package` = waPkg
-        }
+        val pinned = buildEnableStickerPackIntent(packId, packName).apply { `package` = waPkg }
         val firstAttempt = startIntentSafely(context, pinned)
         if (firstAttempt.isSuccess) return firstAttempt
-
         return startIntentSafely(context, buildEnableStickerPackIntent(packId, packName))
     }
 
     fun shareMp4ToWhatsApp(context: Context, mp4File: File, chooserTitle: String): Result<Unit> {
-        val uri = try {
-            fileToContentUri(context, mp4File)
-        } catch (t: Throwable) {
-            return Result.failure(t)
-        }
+        val uri = try { fileToContentUri(context, mp4File) } catch (t: Throwable) { return Result.failure(t) }
         val waPkg = findInstalledWhatsAppPackage(context)
         if (waPkg != null) {
             val directIntent = Intent(Intent.ACTION_SEND).apply {
@@ -134,15 +120,11 @@ object WhatsAppBridge {
         return startChooserSafely(context, generic, chooserTitle)
     }
 
-    fun shareRawPair(context: Context, webpFile: File, oggFile: File, chooserTitle: String): Result<Unit> {
+    fun shareRawPair(context: Context, webpFile: File, oggFile: String, chooserTitle: String): Result<Unit> {
+        val oggFileObj = File(oggFile)
         val uris = try {
-            arrayListOf(
-                fileToContentUri(context, webpFile),
-                fileToContentUri(context, oggFile)
-            )
-        } catch (t: Throwable) {
-            return Result.failure(t)
-        }
+            arrayListOf(fileToContentUri(context, webpFile), fileToContentUri(context, oggFileObj))
+        } catch (t: Throwable) { return Result.failure(t) }
         val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
             type = "*/*"
             putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
@@ -154,7 +136,7 @@ object WhatsAppBridge {
     suspend fun saveMp4ToGallery(context: Context, mp4File: File, baseName: String): Result<Uri> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val cleanName = baseName.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").ifEmpty { "audio_sticker" }
+                val cleanName = baseName.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifEmpty { "audio_sticker" }
                 val fileName = "${cleanName}_${System.currentTimeMillis()}.mp4"
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
@@ -179,35 +161,7 @@ object WhatsAppBridge {
             }
         }
 
-    suspend fun isRootAvailable(): Boolean = RootWhatsAppInjector.checkRootAccess()
-
-    suspend fun injectSoundStickerWithRoot(
-        context: Context,
-        sticker: RootStickerInput,
-        relaunchWhatsApp: Boolean = false
-    ): Result<RootInjectionResult> = RootWhatsAppInjector.injectSingleSticker(
-        context = context,
-        sticker = sticker,
-        relaunchWhatsApp = relaunchWhatsApp
-    )
-
-    suspend fun injectSoundPackWithRoot(
-        context: Context,
-        packMetadata: RootPackMetadata,
-        stickers: List<RootStickerInput>,
-        relaunchWhatsApp: Boolean = false
-    ): Result<RootInjectionResult> = RootWhatsAppInjector.injectPack(
-        context = context,
-        packMetadata = packMetadata,
-        stickers = stickers,
-        relaunchWhatsApp = relaunchWhatsApp
-    )
-
     private fun fileToContentUri(context: Context, file: File): Uri {
-        return FileProvider.getUriForFile(
-            context,
-            "${BuildConfig.APPLICATION_ID}.fileprovider",
-            file
-        )
+        return FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
     }
 }

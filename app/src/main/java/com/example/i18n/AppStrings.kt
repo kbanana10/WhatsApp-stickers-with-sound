@@ -135,21 +135,7 @@ data class Strings(
     val savedToPackMsg: String,
     val exportedFilesMsg: String,
     val processingSpeedNote: String,
-    val errorPrefix: String,
-
-    // Root Direct Injection
-    val rootBadgeLabel: String,
-    val rootInjectSingleBtn: String,
-    val rootInjectPackBtn: String,
-    val rootInjectingStatus: String,
-    val rootInjectSuccessSingle: String,
-    val rootInjectSuccessPack: String,
-    val rootMissingOpusError: String,
-    val rootNoAudioPackError: String,
-    val rootSafetyTitle: String,
-    val rootSafetyBody: String,
-    val rootSafetyConfirmBtn: String,
-    val rootSafetyCancelBtn: String
+    val errorPrefix: String
 )
 
 object AppStrings {
@@ -272,20 +258,7 @@ object AppStrings {
         savedToPackMsg = "تم حفظ الملصق في الحزمة بنجاح!",
         exportedFilesMsg = "تم تجهيز الملفات للمشاركة.",
         processingSpeedNote = "معالجة متوازية عبر %d أنوية",
-        errorPrefix = "خطأ",
-
-        rootBadgeLabel = "صلاحية الروت متاحة (Magisk)",
-        rootInjectSingleBtn = "حقن مباشر في واتساب (روت)",
-        rootInjectPackBtn = "حقن الحزمة بالصوت في واتساب (روت)",
-        rootInjectingStatus = "جارٍ حقن الملصق الصوتي في واتساب...",
-        rootInjectSuccessSingle = "تم حقن الملصق بالصوت في مفضلة واتساب (%s)!",
-        rootInjectSuccessPack = "تم حقن %d ملصقات بالصوت في واتساب (%s)!",
-        rootMissingOpusError = "ملف الصوت Ogg/Opus غير متوفر (يتطلب أندرويد 10 فأحدث).",
-        rootNoAudioPackError = "لا توجد ملصقات تحتوي على صوت Ogg/Opus صالحة في هذه الحزمة.",
-        rootSafetyTitle = "تنبيه الأمان قبل الحقن (روت)",
-        rootSafetyBody = "يتم حفظ نسخة احتياطية تلقائية من قاعدة بيانات الملصقات قبل التعديل. لحماية حسابك:\n\n• أبقِ واتساب ضمن Magisk Zygisk DenyList.\n• جرّب إرسال الملصق لنفسك أو لرقم ثانوي أولاً.\n• تجنّب الحقن الجماعي السريع أو الإرسال المتكرر المفرط.",
-        rootSafetyConfirmBtn = "فهمت، متابعة الحقن",
-        rootSafetyCancelBtn = "إلغاء"
+        errorPrefix = "خطأ"
     )
 
     val English = Strings(
@@ -407,20 +380,7 @@ object AppStrings {
         savedToPackMsg = "Sticker saved to pack!",
         exportedFilesMsg = "Files ready to share.",
         processingSpeedNote = "Parallel engine using %d CPU cores",
-        errorPrefix = "Error",
-
-        rootBadgeLabel = "Magisk Root Available",
-        rootInjectSingleBtn = "Direct Inject to WhatsApp (Root)",
-        rootInjectPackBtn = "Direct Inject Sound Pack (Root)",
-        rootInjectingStatus = "Injecting sound sticker into WhatsApp...",
-        rootInjectSuccessSingle = "Injected sound sticker into WhatsApp Favorites (%s)!",
-        rootInjectSuccessPack = "Injected %d sound sticker(s) into WhatsApp (%s)!",
-        rootMissingOpusError = "Ogg/Opus audio is missing (requires Android 10+ Opus encoder).",
-        rootNoAudioPackError = "No stickers with valid Ogg/Opus audio found in this pack.",
-        rootSafetyTitle = "Root Direct Injection Safety Notice",
-        rootSafetyBody = "An automatic safety backup of stickers.db is saved before any edit. To protect your account:\n\n• Keep WhatsApp in Magisk Zygisk DenyList.\n• Test sending the injected sticker to yourself or a secondary number first.\n• Avoid rapid bulk injection or spamming.",
-        rootSafetyConfirmBtn = "I Understand, Continue",
-        rootSafetyCancelBtn = "Cancel"
+        errorPrefix = "Error"
     )
 
     fun get(language: AppLanguage): Strings = when (language) {
