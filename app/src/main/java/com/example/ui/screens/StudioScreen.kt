@@ -133,7 +133,11 @@ fun StudioScreen(
         val res = state.generatedSticker ?: return@sendViaWeb
         WebSendBridge.pendingStickerBase64 =
             android.util.Base64.encodeToString(res.webpBytes, android.util.Base64.NO_WRAP)
-        WebSendBridge.navigatedToSelf = false
+        WebSendBridge.pendingOggBase64 = res.oggBytes?.let {
+            android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
+        }
+        WebSendBridge.pendingInfoJson =
+            """{"segundosAudio":${res.audioDurationSec},"lado":${res.side},"isAnimated":${res.isAnimated}}"""
         val dir = File(uiContext.cacheDir, "web_send").apply { mkdirs() }
         val f = File(dir, "sticker_${System.currentTimeMillis()}.webp")
         f.writeBytes(res.webpBytes)

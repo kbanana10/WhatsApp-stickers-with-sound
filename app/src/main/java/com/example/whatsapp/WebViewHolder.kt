@@ -46,7 +46,6 @@ object WebViewHolder {
     fun getOrCreate(context: Context): WebView {
         webView?.let { return it }
         val appCtx = context.applicationContext
-        WebSendBridge.selfNumber = WhatsAppLauncher.getSelfNumber(appCtx)
 
         val wv = WebView(appCtx)
         wv.clipToOutline = true

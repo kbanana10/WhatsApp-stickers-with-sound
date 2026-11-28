@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
@@ -37,7 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
@@ -48,11 +47,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -67,10 +64,14 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
     var progress by remember { mutableIntStateOf(if (WebViewHolder.hasFinishedFirstLoad) 100 else 0) }
     var isLoading by remember { mutableStateOf(!WebViewHolder.hasFinishedFirstLoad) }
     var canGoBack by remember { mutableStateOf(false) }
-    var numberText by remember { mutableStateOf(WhatsAppLauncher.getSelfNumber(context)) }
+    var statusText by remember { mutableStateOf<String?>(null) }
     val webViewHolder = remember { arrayOfNulls<WebView>(1) }
     val fileCallback = remember { arrayOfNulls<ValueCallback<Array<Uri>>>(1) }
     val handler = remember { Handler(Looper.getMainLooper()) }
+
+    val waPortJs = remember {
+        context.assets.open("wa_port.js").bufferedReader().use { it.readText() }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents()
@@ -91,7 +92,10 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
         isLoading = false
         canGoBack = view.canGoBack()
         if (WebSendBridge.pendingStickerBase64 != null) {
-            handler.postDelayed({ attemptInject(webViewHolder, handler, 25) }, 900L)
+            handler.postDelayed(
+                { trySendSound(webViewHolder, handler, waPortJs, 25) { statusText = it } },
+                900L
+            )
         }
     }
     WebBridgeCallbacks.onFileChooser = { _, cb, _ ->
@@ -108,14 +112,17 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Trigger immediate injection when returning to an already-loaded WebView with a pending sticker
+    // Trigger send immediately when returning to an already-loaded WebView with a queued sticker
     LaunchedEffect(Unit) {
         if (WebViewHolder.hasFinishedFirstLoad && WebSendBridge.pendingStickerBase64 != null) {
-            handler.postDelayed({ attemptInject(webViewHolder, handler, 25) }, 350L)
+            handler.postDelayed(
+                { trySendSound(webViewHolder, handler, waPortJs, 25) { statusText = it } },
+                350L
+            )
         }
     }
 
-    // Detach only on tab leave without destroying WebView so WhatsApp Web does not reload
+    // Detach only on tab leave without destroying WebView so session stays intact
     DisposableEffect(Unit) {
         onDispose {
             handler.removeCallbacksAndMessages(null)
@@ -161,7 +168,9 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
                 Text("افتح واتساب", maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             OutlinedButton(
-                onClick = { attemptInject(webViewHolder, handler, 20) },
+                onClick = {
+                    trySendSound(webViewHolder, handler, waPortJs, 20) { statusText = it }
+                },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier.minimumInteractiveComponentSize().testTag("web_inject_now_button")
             ) {
@@ -175,9 +184,9 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
                         wv.clearCache(true)
                         CookieManager.getInstance().removeAllCookies(null)
                         WebStorage.getInstance().deleteAllData()
-                        WebSendBridge.navigatedToSelf = false
                         WebViewHolder.hasFinishedFirstLoad = false
                         isLoading = true
+                        statusText = null
                         wv.loadUrl("https://web.whatsapp.com/")
                     }
                 },
@@ -190,29 +199,17 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            OutlinedTextField(
-                value = numberText,
-                onValueChange = { numberText = it },
-                label = { Text("رقمك للواتساب (مع رمز الدولة)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                modifier = Modifier.weight(1f).testTag("web_self_number_input")
-            )
-            Button(
-                onClick = {
-                    WhatsAppLauncher.setSelfNumber(context, numberText)
-                    WebSendBridge.selfNumber = numberText.filter { it.isDigit() }
-                },
-                modifier = Modifier.minimumInteractiveComponentSize().testTag("web_save_number_button")
+        statusText?.let { msg ->
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text("حفظ")
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
             }
         }
 
@@ -249,71 +246,89 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
 }
 
 /**
- * Smart injection: if a chat composer is already open, paste and send immediately with zero navigation.
- * Only if no composer is present and selfNumber is saved, navigate to send?phone= once.
+ * Injects wa_port.js into WhatsApp Web's MAIN world, enables sound sticker gating locally,
+ * uploads OGG audio, and sends the WebP + stickerAudio payload to self chat internally without page reload.
  */
-private fun attemptInject(
+private fun trySendSound(
     holder: Array<WebView?>,
     handler: Handler,
-    retries: Int
+    waPortJs: String,
+    retries: Int,
+    onStatus: (String?) -> Unit
 ) {
     val wv = holder[0] ?: return
-    val b64 = WebSendBridge.pendingStickerBase64 ?: return
-    if (retries <= 0) return
+    val webp = WebSendBridge.pendingStickerBase64 ?: return
+    val ogg = WebSendBridge.pendingOggBase64 ?: ""
+    val info = WebSendBridge.pendingInfoJson ?: "{}"
+    if (retries <= 0) {
+        onStatus("انتهت مهلة الإرسال عبر واتساب ويب — تأكد من تسجيل الدخول ثم اضغط حقن الآن.")
+        return
+    }
 
-    val probeJs =
-        "(function(){return !!document.querySelector('#main footer div[contenteditable=\"true\"]');})()"
-    wv.evaluateJavascript(probeJs) { hasBox ->
-        if (hasBox == "true") {
-            wv.evaluateJavascript(injectJs(b64)) { res ->
-                if (res?.contains("PASTED") == true) {
-                    handler.postDelayed({
-                        if (WebSendBridge.autoSend) {
-                            wv.evaluateJavascript(sendJs()) {}
-                        }
-                        WebSendBridge.pendingStickerBase64 = null
-                        WebSendBridge.navigatedToSelf = false
-                    }, 1100L)
-                } else {
-                    handler.postDelayed({ attemptInject(holder, handler, retries - 1) }, 700L)
+    wv.evaluateJavascript(
+        "(function(){return typeof window.require==='function'&&typeof window.__d==='function';})()"
+    ) { ready ->
+        if (ready == "true") {
+            onStatus("جارٍ إرسال الملصق الصوتي عبر واتساب ويب...")
+            wv.evaluateJavascript(waPortJs) { _ ->
+                wv.evaluateJavascript("WAAS_startSendB64('$webp','$ogg',$info,'propio')") { startRes ->
+                    if (startRes?.contains("STARTED") == true || startRes?.contains("BUSY") == true) {
+                        pollSendState(holder, handler, waPortJs, retries, 30, onStatus)
+                    } else {
+                        handler.postDelayed(
+                            { trySendSound(holder, handler, waPortJs, retries - 1, onStatus) },
+                            1200L
+                        )
+                    }
                 }
             }
         } else {
-            val num = WebSendBridge.selfNumber
-            if (num.isNotBlank() && !WebSendBridge.navigatedToSelf) {
-                WebSendBridge.navigatedToSelf = true
-                wv.loadUrl("https://web.whatsapp.com/send?phone=$num")
-                handler.postDelayed({ attemptInject(holder, handler, retries - 1) }, 1500L)
-            } else {
-                handler.postDelayed({ attemptInject(holder, handler, retries - 1) }, 700L)
-            }
+            handler.postDelayed(
+                { trySendSound(holder, handler, waPortJs, retries - 1, onStatus) },
+                1000L
+            )
         }
     }
 }
 
-private fun injectJs(b64: String) = """
-    (function(){try{
-      var bin=atob("$b64");var arr=new Uint8Array(bin.length);
-      for(var i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
-      var file=new File([arr],"sticker.webp",{type:"image/webp"});
-      var dt=new DataTransfer();dt.items.add(file);
-      var box=document.querySelector('#main footer div[contenteditable="true"][data-tab="10"]')
-            ||document.querySelector('#main footer div[contenteditable="true"]');
-      if(!box)return "NO_BOX";
-      box.focus();
-      box.dispatchEvent(new ClipboardEvent("paste",{clipboardData:dt,bubbles:true,cancelable:true}));
-      return "PASTED";
-    }catch(e){return "ERR:"+e.message;}})();
-""".trimIndent()
-
-private fun sendJs() = """
-    (function(){
-      var icons=document.querySelectorAll('[data-icon="wds-ic-send-filled"],[data-icon="send"]');
-      var el=null;
-      for(var i=icons.length-1;i>=0;i--){var r=icons[i].getBoundingClientRect();
-        if(r.width>0&&r.height>0){el=icons[i];break;}}
-      if(!el)return "NO_SEND";
-      var btn=el.closest('button')||el.closest('[role="button"]')||el.parentElement;
-      (btn||el).click();return "SENT";
-    })();
-""".trimIndent()
+private fun pollSendState(
+    holder: Array<WebView?>,
+    handler: Handler,
+    waPortJs: String,
+    retries: Int,
+    pollLeft: Int,
+    onStatus: (String?) -> Unit
+) {
+    val wv = holder[0] ?: return
+    if (pollLeft <= 0) {
+        onStatus("انتهت مهلة انتظار الرفع — اضغط حقن الآن للمحاولة مجدداً.")
+        return
+    }
+    wv.evaluateJavascript("(function(){return window.__WAAS_SEND_STATE||'IDLE';})()") { raw ->
+        val state = raw?.trim('"') ?: "IDLE"
+        when {
+            state == "PENDING" -> {
+                handler.postDelayed(
+                    { pollSendState(holder, handler, waPortJs, retries, pollLeft - 1, onStatus) },
+                    500L
+                )
+            }
+            state.startsWith("OK:") -> {
+                WebSendBridge.pendingStickerBase64 = null
+                WebSendBridge.pendingOggBase64 = null
+                WebSendBridge.pendingInfoJson = null
+                onStatus("تم إرسال الملصق الصوتي إلى محادثتك بنجاح ✅")
+            }
+            state.contains("no-self-number") || state.contains("wa-not-loaded") -> {
+                // Likely still on QR / initial boot screen; retry later
+                handler.postDelayed(
+                    { trySendSound(holder, handler, waPortJs, retries - 1, onStatus) },
+                    1500L
+                )
+            }
+            else -> {
+                onStatus("خطأ بالإرسال: $state")
+            }
+        }
+    }
+}
