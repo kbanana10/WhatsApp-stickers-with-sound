@@ -114,6 +114,8 @@ import com.example.ui.viewmodel.StudioViewModel
 import com.example.whatsapp.WebSendBridge
 import java.io.File
 
+const val FAVORITES_PACK_NAME = "المفضلة"
+
 @Composable
 fun StudioScreen(
     viewModel: StudioViewModel,
@@ -123,8 +125,33 @@ fun StudioScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val packs by viewModel.packs.collectAsStateWithLifecycle(initialValue = emptyList())
+    val uiContext = LocalContext.current
     var showSaveDialog by remember { mutableStateOf(false) }
     var showAdvanced by remember { mutableStateOf(false) }
+
+    val sendViaWeb: () -> Unit = sendViaWeb@{
+        val res = state.generatedSticker ?: return@sendViaWeb
+        WebSendBridge.pendingStickerBase64 =
+            android.util.Base64.encodeToString(res.webpBytes, android.util.Base64.NO_WRAP)
+        WebSendBridge.navigatedToSelf = false
+        val dir = File(uiContext.cacheDir, "web_send").apply { mkdirs() }
+        val f = File(dir, "sticker_${System.currentTimeMillis()}.webp")
+        f.writeBytes(res.webpBytes)
+        WebSendBridge.pendingStickerUri = FileProvider.getUriForFile(
+            uiContext,
+            "${BuildConfig.APPLICATION_ID}.fileprovider",
+            f
+        )
+        val fav = packs.firstOrNull { it.pack.name == FAVORITES_PACK_NAME }
+        if (fav != null) {
+            if (fav.stickers.size < 30) {
+                viewModel.saveToPack(fav.pack, strings.savedToPackMsg)
+            }
+        } else {
+            viewModel.createNewPackAndSave(FAVORITES_PACK_NAME, state.publisher, strings.savedToPackMsg)
+        }
+        onOpenWeb()
+    }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -238,7 +265,7 @@ fun StudioScreen(
                     isBusy = isBusy,
                     viewModel = viewModel,
                     onOpenSaveDialog = { showSaveDialog = true },
-                    onOpenWeb = onOpenWeb
+                    onSendViaWeb = sendViaWeb
                 )
             }
 
@@ -929,7 +956,7 @@ private fun CreateAndExportSection(
     isBusy: Boolean,
     viewModel: StudioViewModel,
     onOpenSaveDialog: () -> Unit,
-    onOpenWeb: () -> Unit
+    onSendViaWeb: () -> Unit
 ) {
     val uiContext = LocalContext.current
     Row(
@@ -1147,18 +1174,7 @@ private fun CreateAndExportSection(
                 }
 
                 OutlinedButton(
-                    onClick = {
-                        val res = state.generatedSticker ?: return@OutlinedButton
-                        val dir = File(uiContext.cacheDir, "web_send").apply { mkdirs() }
-                        val f = File(dir, "sticker_${System.currentTimeMillis()}.webp")
-                        f.writeBytes(res.webpBytes)
-                        WebSendBridge.pendingStickerUri = FileProvider.getUriForFile(
-                            uiContext,
-                            "${BuildConfig.APPLICATION_ID}.fileprovider",
-                            f
-                        )
-                        onOpenWeb()
-                    },
+                    onClick = onSendViaWeb,
                     modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("send_via_web_button")
                 ) {
                     Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))

@@ -24,4 +24,17 @@ object WhatsAppLauncher {
             )
         }.isSuccess
     }
+
+    /** Reads the saved self phone number used to auto-open "Message yourself" in WhatsApp Web. */
+    fun getSelfNumber(context: Context): String =
+        context.getSharedPreferences("wa_web", Context.MODE_PRIVATE)
+            .getString("self_number", "") ?: ""
+
+    /** Saves the user's own WhatsApp phone number (digits only). */
+    fun setSelfNumber(context: Context, number: String) {
+        context.getSharedPreferences("wa_web", Context.MODE_PRIVATE)
+            .edit()
+            .putString("self_number", number.filter { it.isDigit() })
+            .apply()
+    }
 }
