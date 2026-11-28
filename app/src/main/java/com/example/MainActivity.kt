@@ -23,8 +23,10 @@ import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.FolderSpecial
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +70,7 @@ import com.example.i18n.AppStrings
 import com.example.ui.screens.PackDetailScreen
 import com.example.ui.screens.PacksScreen
 import com.example.ui.screens.StudioScreen
+import com.example.ui.screens.WhatsAppWebScreen
 import com.example.ui.theme.AudioStickersTheme
 import com.example.ui.theme.ThemeMode
 import com.example.ui.viewmodel.PacksViewModel
@@ -77,6 +80,7 @@ import kotlinx.coroutines.launch
 object Routes {
     const val STUDIO = "studio"
     const val PACKS = "packs"
+    const val WEB = "web"
     const val PACK_DETAIL = "pack_detail/{packId}"
     fun packDetail(packId: String) = "pack_detail/$packId"
 }
@@ -137,7 +141,9 @@ fun AudioStickersApp(
     val studioViewModel: StudioViewModel = viewModel()
     val packsViewModel: PacksViewModel = viewModel()
 
-    val showChrome = currentRoute == Routes.STUDIO || currentRoute == Routes.PACKS
+    val showChrome = currentRoute == Routes.STUDIO ||
+        currentRoute == Routes.PACKS ||
+        currentRoute == Routes.WEB
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val useNavRail = maxWidth >= 600.dp
@@ -248,6 +254,24 @@ fun AudioStickersApp(
                             label = { Text(strings.navPacks) },
                             modifier = Modifier.testTag("nav_packs_tab")
                         )
+                        NavigationBarItem(
+                            selected = currentRoute == Routes.WEB,
+                            onClick = {
+                                navController.navigate(Routes.WEB) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    if (currentRoute == Routes.WEB) Icons.Filled.Public else Icons.Outlined.Public,
+                                    contentDescription = strings.navWeb
+                                )
+                            },
+                            label = { Text(strings.navWeb) },
+                            modifier = Modifier.testTag("nav_web_tab")
+                        )
                     }
                 }
             }
@@ -293,6 +317,23 @@ fun AudioStickersApp(
                             },
                             label = { Text(strings.navPacks) }
                         )
+                        NavigationRailItem(
+                            selected = currentRoute == Routes.WEB,
+                            onClick = {
+                                navController.navigate(Routes.WEB) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    if (currentRoute == Routes.WEB) Icons.Filled.Public else Icons.Outlined.Public,
+                                    contentDescription = strings.navWeb
+                                )
+                            },
+                            label = { Text(strings.navWeb) }
+                        )
                     }
                 }
 
@@ -312,6 +353,9 @@ fun AudioStickersApp(
                                 navController.navigate(Routes.packDetail(packId))
                             }
                         )
+                    }
+                    composable(Routes.WEB) {
+                        WhatsAppWebScreen()
                     }
                     composable(
                         route = Routes.PACK_DETAIL,

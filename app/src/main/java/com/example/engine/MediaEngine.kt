@@ -477,7 +477,7 @@ object MediaEngine {
             }
 
             val cell = analysis.cells.firstOrNull { it.side == side && it.fps == fps }
-            val previewCount = min(24, analysis.frames.size).coerceAtLeast(1)
+            val previewCount = min(48, analysis.frames.size).coerceAtLeast(1)
             val previewBitmaps = List(previewCount) { i ->
                 val idx = (i * analysis.frames.size) / previewCount
                 analysis.frames[idx].bitmap

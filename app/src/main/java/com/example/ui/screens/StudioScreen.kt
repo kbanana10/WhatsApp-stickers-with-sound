@@ -101,6 +101,7 @@ import com.example.ui.components.QualityPresetRow
 import com.example.ui.components.SaveToPackDialog
 import com.example.ui.components.StickerPreviewBox
 import com.example.ui.components.TimelineTrimmer
+import com.example.ui.components.VideoPreviewPlayer
 import com.example.ui.components.formatKb
 import com.example.ui.components.formatSec
 import com.example.ui.theme.MonoFontFamily
@@ -539,23 +540,39 @@ private fun TrimSectionContent(
         return
     }
 
-    // Visual Frame Preview Thumbnail
-    state.visualPreviewBitmap?.let { bmp ->
-        if (!bmp.isRecycled) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(170.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
+    // Visual Video Player for VIDEO mode, or Frame Thumbnail for IMAGE/MIX
+    val activeVideoUri = state.visualUri
+    if (state.mode == StudioMode.VIDEO && activeVideoUri != null) {
+        VideoPreviewPlayer(
+            uri = activeVideoUri,
+            startSec = state.visualStartSec,
+            endSec = state.visualEndSec,
+            playing = state.isPlayingAudio,
+            cursorSec = state.visualCursorSec,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(170.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        )
+    } else {
+        state.visualPreviewBitmap?.let { bmp ->
+            if (!bmp.isRecycled) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(170.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
@@ -574,7 +591,7 @@ private fun TrimSectionContent(
             onTrimChange = viewModel::updateVisualTrim,
             onCursorChange = viewModel::updateVisualCursor,
             onPlayClip = {
-                if (state.mode == StudioMode.VIDEO && state.visualHasAudio) {
+                if (state.mode == StudioMode.VIDEO) {
                     viewModel.playAudioRange(state.visualStartSec, state.visualEndSec, forVisualTrim = true)
                 }
             },
@@ -1016,6 +1033,7 @@ private fun CreateAndExportSection(
                         frames = res.previewFrames,
                         fps = res.fps,
                         isAnimated = res.isAnimated,
+                        durationSec = res.durationSec,
                         sizeDp = 112.dp
                     )
                     Column(
@@ -1052,13 +1070,13 @@ private fun CreateAndExportSection(
                     }
                 }
 
-                // Direct Android & WhatsApp Actions
+                // Primary: Save MP4 to Gallery (for WhatsApp's official Create Sticker flow)
                 Button(
                     onClick = {
                         viewModel.exportAndShareMp4(
                             uiContext = uiContext,
-                            chooserTitle = strings.shareMp4WaBtn,
-                            shareDirectlyToWhatsApp = true,
+                            chooserTitle = strings.saveMp4GalleryBtn,
+                            shareDirectlyToWhatsApp = false,
                             galleryMsg = strings.savedToGalleryMsg
                         )
                     },
@@ -1067,17 +1085,18 @@ private fun CreateAndExportSection(
                         containerColor = MaterialTheme.colorScheme.secondary,
                         contentColor = MaterialTheme.colorScheme.onSecondary
                     ),
-                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("share_mp4_button")
+                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize().testTag("save_mp4_gallery_button")
                 ) {
                     if (state.isExportingMp4) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSecondary)
                     } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     }
                     Spacer(Modifier.width(6.dp))
-                    Text(strings.shareMp4WaBtn)
+                    Text(strings.saveMp4GalleryBtn)
                 }
 
+                // Secondary actions: Save to Pack + Direct Share MP4 (sends as video message, not sticker)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1094,17 +1113,17 @@ private fun CreateAndExportSection(
                         onClick = {
                             viewModel.exportAndShareMp4(
                                 uiContext = uiContext,
-                                chooserTitle = strings.saveMp4GalleryBtn,
-                                shareDirectlyToWhatsApp = false,
+                                chooserTitle = strings.shareMp4WaBtn,
+                                shareDirectlyToWhatsApp = true,
                                 galleryMsg = strings.savedToGalleryMsg
                             )
                         },
                         enabled = !state.isExportingMp4,
-                        modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("save_mp4_gallery_button")
+                        modifier = Modifier.weight(1f).minimumInteractiveComponentSize().testTag("share_mp4_button")
                     ) {
-                        Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(strings.saveMp4GalleryBtn, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(strings.shareMp4WaBtn, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
                     }
                 }
 

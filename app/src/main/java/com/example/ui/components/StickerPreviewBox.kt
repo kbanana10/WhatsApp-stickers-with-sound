@@ -34,15 +34,16 @@ fun StickerPreviewBox(
     frames: List<Bitmap>,
     fps: Int,
     isAnimated: Boolean,
+    durationSec: Double,
     sizeDp: Dp = 128.dp,
     showAudioBadge: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var frameIndex by remember(frames) { mutableIntStateOf(0) }
 
-    LaunchedEffect(frames, fps, isAnimated) {
-        if (isAnimated && frames.size > 1) {
-            val stepMs = (1000L / fps.coerceIn(1, 30)).coerceAtLeast(33L)
+    LaunchedEffect(frames, durationSec, isAnimated) {
+        if (isAnimated && frames.size > 1 && durationSec > 0.0) {
+            val stepMs = ((durationSec * 1000.0) / frames.size).toLong().coerceAtLeast(16L)
             while (true) {
                 delay(stepMs)
                 frameIndex = (frameIndex + 1) % frames.size

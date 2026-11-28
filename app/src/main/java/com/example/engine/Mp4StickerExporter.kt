@@ -9,6 +9,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -94,6 +95,11 @@ object Mp4StickerExporter {
             setInteger(MediaFormat.KEY_BIT_RATE, (side * side * 8).coerceIn(800_000, 2_500_000))
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel31)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                runCatching { setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0) }
+            }
         }
         val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         val samples = mutableListOf<EncodedSample>()
