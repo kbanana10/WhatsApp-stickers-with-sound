@@ -113,6 +113,7 @@ import com.example.ui.viewmodel.StudioUiState
 import com.example.ui.viewmodel.StudioViewModel
 import com.example.whatsapp.WebSendBridge
 import java.io.File
+import kotlin.math.roundToInt
 
 const val FAVORITES_PACK_NAME = "المفضلة"
 
@@ -136,8 +137,9 @@ fun StudioScreen(
         WebSendBridge.pendingOggBase64 = res.oggBytes?.let {
             android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
         }
+        val audioSec = res.audioDurationSec.roundToInt().coerceAtLeast(1)
         WebSendBridge.pendingInfoJson =
-            """{"segundosAudio":${res.audioDurationSec},"lado":${res.side},"isAnimated":${res.isAnimated}}"""
+            """{"segundosAudio":$audioSec,"lado":${res.side},"isAnimated":${res.isAnimated}}"""
         val dir = File(uiContext.cacheDir, "web_send").apply { mkdirs() }
         val f = File(dir, "sticker_${System.currentTimeMillis()}.webp")
         f.writeBytes(res.webpBytes)

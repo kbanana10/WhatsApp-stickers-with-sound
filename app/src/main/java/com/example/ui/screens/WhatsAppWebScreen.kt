@@ -169,7 +169,11 @@ fun WhatsAppWebScreen(modifier: Modifier = Modifier) {
             }
             OutlinedButton(
                 onClick = {
-                    trySendSound(webViewHolder, handler, waPortJs, 20) { statusText = it }
+                    if (WebSendBridge.pendingStickerBase64 == null) {
+                        statusText = "لا يوجد ملصق جاهز للإرسال — أنشئ ملصقاً من الاستوديو أولاً."
+                    } else {
+                        trySendSound(webViewHolder, handler, waPortJs, 20) { statusText = it }
+                    }
                 },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier.minimumInteractiveComponentSize().testTag("web_inject_now_button")
@@ -273,7 +277,7 @@ private fun trySendSound(
             wv.evaluateJavascript(waPortJs) { _ ->
                 wv.evaluateJavascript("WAAS_startSendB64('$webp','$ogg',$info,'propio')") { startRes ->
                     if (startRes?.contains("STARTED") == true || startRes?.contains("BUSY") == true) {
-                        pollSendState(holder, handler, waPortJs, retries, 30, onStatus)
+                        pollSendState(holder, handler, waPortJs, retries, 80, onStatus)
                     } else {
                         handler.postDelayed(
                             { trySendSound(holder, handler, waPortJs, retries - 1, onStatus) },

@@ -42,19 +42,57 @@
     return ns(name);
   }
 
+  let _runLogs = [];
+  let _activeRun = false;
+
+  W.hookWALogger = function () {
+    if (W._loggerHooked) return;
+    try {
+      const L = ns("WALogger");
+      const RELEVANT = /sticker|media|upload|sound|forward|prep|send|mms|encrypt|kaleidoscope|error|fail/i;
+      for (const lvl of ["LOG", "WARN", "ERROR"]) {
+        const orig = L[lvl];
+        if (typeof orig !== "function" || orig.__waas) continue;
+        const wrapped = function (strings) {
+          try {
+            if (_activeRun && strings && strings.raw) {
+              const vals = Array.prototype.slice.call(arguments, 1);
+              let msg = "";
+              for (let i = 0; i < strings.length; i++) {
+                msg += strings[i] + (i < vals.length ? String(vals[i]) : "");
+              }
+              if (lvl !== "LOG" || RELEVANT.test(msg)) {
+                _runLogs.push(lvl + ":" + msg.slice(0, 180));
+                if (_runLogs.length > 25) _runLogs.shift();
+              }
+            }
+          } catch (_) {}
+          return orig.apply(this, arguments);
+        };
+        wrapped.__waas = true;
+        L[lvl] = wrapped;
+      }
+      W._loggerHooked = true;
+    } catch (_) {}
+  };
+
   // Enable sound stickers gating locally so WhatsApp Web keeps the stickerAudio payload
   W.forceSoundStickers = function () {
     if (W._forced) return true;
     try {
       const AB = ns("WAWebABProps");
       const orig = AB.getABPropConfigValue;
-      if (!orig.__waas) {
+      if (orig && !orig.__waas) {
         const patched = function (name) {
           if (SOUND_PROPS.includes(name)) return true;
           return orig.apply(this, arguments);
         };
         patched.__waas = true;
-        AB.getABPropConfigValue = patched;
+        try {
+          AB.getABPropConfigValue = patched;
+        } catch (_) {
+          Object.defineProperty(AB, "getABPropConfigValue", { value: patched, configurable: true, writable: true });
+        }
       }
     } catch (e) {
       log("warn", "gating:abprops", e);
@@ -70,11 +108,13 @@
       }
     };
     if (G && !ok()) {
-      try {
-        G.isSoundStickerConsumptionEnabled = () => true;
-        G.isSoundStickerCreationEnabled = () => true;
-        G.isSoundStickerPlaybackEnabled = () => true;
-      } catch (_) {}
+      for (const fn of ["isSoundStickerConsumptionEnabled", "isSoundStickerCreationEnabled", "isSoundStickerPlaybackEnabled"]) {
+        try {
+          G[fn] = () => true;
+        } catch (_) {
+          try { Object.defineProperty(G, fn, { value: () => true, configurable: true, writable: true }); } catch (__) {}
+        }
+      }
     }
     W._forced = !!G && ok();
     return W._forced;
@@ -83,6 +123,10 @@
   W.getActiveChat = () => ns("WAWebChatCollection").ChatCollection.getActive() || null;
 
   W.getSelfChat = async function () {
+    try {
+      const active = W.getActiveChat();
+      if (active && active.contact && active.contact.isMe) return active;
+    } catch (_) {}
     const Me = ns("WAWebUserPrefsMeUser");
     const CC = ns("WAWebChatCollection").ChatCollection;
     let firstWid = null;
@@ -103,7 +147,11 @@
   function toB64(v) {
     if (v == null) return v;
     if (typeof v === "string") return v;
-    const bytes = v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer || v);
+    const bytes = v instanceof ArrayBuffer
+      ? new Uint8Array(v)
+      : ArrayBuffer.isView(v)
+        ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength)
+        : new Uint8Array(v);
     let s = "";
     for (const b of bytes) s += String.fromCharCode(b);
     return btoa(s);
@@ -111,6 +159,7 @@
   const noopQpl = new Proxy({}, { get: () => () => undefined });
 
   W.uploadAudio = async function (oggBlob, seconds, chat) {
+    const durInt = Math.max(1, Math.round(Number(seconds) || 1));
     const MT = ns("WAWebMmsMediaTypes").MEDIA_TYPES;
     let uploadOrigin = 1;
     try { uploadOrigin = def("WAWebMediaGetUploadOriginForChat")(chat); } catch (_) {}
@@ -144,7 +193,7 @@
       encFilehash: toB64(res.encFilehash),
       size: bytes.length,
       mimetype: "audio/ogg; codecs=opus",
-      duration: seconds
+      duration: durInt
     };
     let complete = null;
     try {
@@ -160,34 +209,49 @@
     const Opaque = def("WAWebMediaOpaqueData");
     const MediaPrep = def("WAWebMediaPrep");
     const opaque = await Opaque.createFromData(webpBlob, "image/webp");
+    const side = Math.max(64, Math.round(Number(info.lado) || 512));
     const data = {
       type: "sticker",
       mediaBlob: opaque,
       mimetype: "image/webp",
       size: webpBlob.size,
-      fullWidth: info.lado || 512,
-      fullHeight: info.lado || 512,
+      fullWidth: side,
+      fullHeight: side,
       isAnimated: !!info.isAnimated,
       emojis: ["🔊"]
     };
     const prep = new MediaPrep("sticker", Promise.resolve(data));
     const res = await prep.sendToChat({ chat, options: stickerAudio ? { stickerAudio } : {} });
     const OK = ns("WAWebSendMsgResultAction").SendMsgResult.OK;
-    if (!(res && res.messageSendResult === OK)) {
-      throw new Error("send-failed(" + (res && res.messageSendResult) + ")");
+    const sendRes = res && res.messageSendResult;
+    if (sendRes !== OK) {
+      const msg = res && res.msg;
+      const errMsg = res && res.error ? String(res.error.message || res.error) : "";
+      const stage = msg && msg.mediaData && msg.mediaData.mediaStage ? String(msg.mediaData.mediaStage) : "";
+      const ack = msg && msg.ack != null ? String(msg.ack) : "";
+      const waLogs = _runLogs.slice(-3).join(" | ");
+      const details = [errMsg, stage ? "stage=" + stage : "", ack ? "ack=" + ack : "", waLogs].filter(Boolean).join("; ");
+      throw new Error("send-failed(" + sendRes + (details ? " :: " + details : "") + ")");
     }
     return res.msg;
   };
 
   W.publish = async function ({ webp, ogg, info }, { destino = "propio" } = {}) {
-    if (!W.forceSoundStickers()) log("warn", "gating", "not-forced");
-    const chat = destino === "abierto" ? W.getActiveChat() : await W.getSelfChat();
-    if (!chat) throw new Error("no-chat");
-    const stickerAudio = (ogg && ogg.size > 0)
-      ? await W.uploadAudio(ogg, info.segundosAudio, chat)
-      : null;
-    const msg = await W.sendSticker(chat, webp, info, stickerAudio);
-    return { chat, msg };
+    _runLogs = [];
+    _activeRun = true;
+    try {
+      W.hookWALogger();
+      if (!W.forceSoundStickers()) log("warn", "gating", "not-forced");
+      const chat = destino === "abierto" ? W.getActiveChat() : await W.getSelfChat();
+      if (!chat) throw new Error("no-chat");
+      const stickerAudio = (ogg && ogg.size > 0)
+        ? await W.uploadAudio(ogg, info.segundosAudio, chat)
+        : null;
+      const msg = await W.sendSticker(chat, webp, info, stickerAudio);
+      return { chat, msg };
+    } finally {
+      _activeRun = false;
+    }
   };
 })();
 
